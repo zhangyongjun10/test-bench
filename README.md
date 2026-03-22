@@ -38,7 +38,7 @@ npm install
 npm run dev
 ```
 
-前端地址: http://localhost:5173
+前端地址: http://localhost:3000
 
 ## 环境变量
 
