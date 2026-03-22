@@ -46,7 +46,7 @@ class SpanResponse(BaseModel):
     name: str
     input: Optional[str]
     output: Optional[str]
-    duration_ms: int
+    duration_ms: Optional[int]
     ttft_ms: Optional[float]
     tpot_ms: Optional[float]
 

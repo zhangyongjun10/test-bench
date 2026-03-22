@@ -1,0 +1,97 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]: TestBench
+      - menu [ref=e7]:
+        - menuitem "cloud-server AaaS平台" [expanded] [ref=e8] [cursor=pointer]:
+          - img "cloud-server" [ref=e9]:
+            - img [ref=e10]
+          - generic [ref=e14]: AaaS平台
+        - menu [ref=e15]:
+          - menuitem "robot Agent 管理" [ref=e16] [cursor=pointer]:
+            - img "robot" [ref=e17]:
+              - img [ref=e18]
+            - generic [ref=e20]: Agent 管理
+          - menuitem "api LLM 模型" [ref=e21] [cursor=pointer]:
+            - img "api" [ref=e22]:
+              - img [ref=e23]
+            - generic [ref=e25]: LLM 模型
+          - menuitem "file-text 测试场景" [ref=e26] [cursor=pointer]:
+            - img "file-text" [ref=e27]:
+              - img [ref=e28]
+            - generic [ref=e30]: 测试场景
+          - menuitem "play-circle 测试执行" [ref=e31] [cursor=pointer]:
+            - img "play-circle" [ref=e32]:
+              - img [ref=e33]
+            - generic [ref=e36]: 测试执行
+          - menuitem "setting 系统配置" [ref=e37] [cursor=pointer]:
+            - img "setting" [ref=e38]:
+              - img [ref=e39]
+            - generic [ref=e41]: 系统配置
+        - menuitem "cluster MaaS平台" [ref=e42] [cursor=pointer]:
+          - img "cluster" [ref=e43]:
+            - img [ref=e44]
+          - generic [ref=e46]: MaaS平台
+    - img "left" [ref=e48] [cursor=pointer]:
+      - img [ref=e49]
+  - generic [ref=e51]:
+    - banner [ref=e52]
+    - main [ref=e53]:
+      - generic [ref=e61]:
+        - generic [ref=e62]:
+          - generic [ref=e64]:
+            - generic [ref=e65]: 执行详情
+            - button "left 返回列表" [ref=e67] [cursor=pointer]:
+              - img "left" [ref=e69]:
+                - img [ref=e70]
+              - generic [ref=e72]: 返回列表
+          - table [ref=e76]:
+            - rowgroup [ref=e77]:
+              - row "执行ID ef1d2d1b-42ad-42db-a1c6-f6668a4b9c2d 状态 完成" [ref=e78]:
+                - rowheader "执行ID" [ref=e79]
+                - cell "ef1d2d1b-42ad-42db-a1c6-f6668a4b9c2d" [ref=e80]
+                - rowheader "状态" [ref=e81]
+                - cell "完成" [ref=e82]:
+                  - generic [ref=e84]: 完成
+              - row "Agent ID d2855650-1a09-456b-9a8c-6edccdd3c650 场景 ID 6af38fff-a28d-4e1f-b341-068ef6bc3eb4" [ref=e85]:
+                - rowheader "Agent ID" [ref=e86]
+                - cell "d2855650-1a09-456b-9a8c-6edccdd3c650" [ref=e87]
+                - rowheader "场景 ID" [ref=e88]
+                - cell "6af38fff-a28d-4e1f-b341-068ef6bc3eb4" [ref=e89]
+              - row "Trace ID 019d14d4-c2e4-705d-a0a0-ad380b613481 比对分数 -" [ref=e90]:
+                - rowheader "Trace ID" [ref=e91]
+                - cell "019d14d4-c2e4-705d-a0a0-ad380b613481" [ref=e92]
+                - rowheader "比对分数" [ref=e93]
+                - cell "-" [ref=e94]
+              - row "比对结果 - 耗时 10.586s" [ref=e95]:
+                - rowheader "比对结果" [ref=e96]
+                - cell "-" [ref=e97]
+                - rowheader "耗时" [ref=e98]
+                - cell "10.586s" [ref=e99]
+              - row "创建时间 2026/3/22 17:16:20 完成时间 2026/3/22 17:16:31" [ref=e100]:
+                - rowheader "创建时间" [ref=e101]
+                - cell "2026/3/22 17:16:20" [ref=e102]
+                - rowheader "完成时间" [ref=e103]
+                - cell "2026/3/22 17:16:31" [ref=e104]
+        - generic [ref=e105]:
+          - generic [ref=e108]: Agent 原始请求内容
+          - generic [ref=e110]: 请简要介绍什么是人工智能？
+        - generic [ref=e111]:
+          - generic [ref=e114]: Agent 原始返回结果
+          - generic [ref=e116]: 第14次，这才是**终极答案**：
+        - generic [ref=e117]:
+          - generic [ref=e120]: 全链路回放
+          - generic [ref=e121]:
+            - generic [ref=e124]:
+              - img "check" [ref=e127]:
+                - img [ref=e128]
+              - generic [ref=e130]:
+                - generic [ref=e131]: glm-4.7-fp8 (llm)
+                - generic [ref=e134]: "耗时: 9579000ms"
+            - 'button "collapsed llm glm-4.7-fp8 - {\"prompt\":\"请简要介绍什么是人工智能？\",\"systemPrompt\":\"You are ..." [ref=e137] [cursor=pointer]':
+              - img "collapsed" [ref=e139]:
+                - img [ref=e140]
+              - generic [ref=e143]:
+                - generic [ref=e145]: llm
+                - generic [ref=e146]: glm-4.7-fp8
+                - generic [ref=e148]: "- {\"prompt\":\"请简要介绍什么是人工智能？\",\"systemPrompt\":\"You are ..."

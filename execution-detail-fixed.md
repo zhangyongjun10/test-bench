@@ -1,0 +1,81 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]: TestBench
+      - menu [ref=e7]:
+        - menuitem "cloud-server AaaS平台" [expanded] [ref=e8] [cursor=pointer]:
+          - img "cloud-server" [ref=e9]:
+            - img [ref=e10]
+          - generic [ref=e14]: AaaS平台
+        - menu [ref=e15]:
+          - menuitem "robot Agent 管理" [ref=e16] [cursor=pointer]:
+            - img "robot" [ref=e17]:
+              - img [ref=e18]
+            - generic [ref=e20]: Agent 管理
+          - menuitem "api LLM 模型" [ref=e21] [cursor=pointer]:
+            - img "api" [ref=e22]:
+              - img [ref=e23]
+            - generic [ref=e25]: LLM 模型
+          - menuitem "file-text 测试场景" [ref=e26] [cursor=pointer]:
+            - img "file-text" [ref=e27]:
+              - img [ref=e28]
+            - generic [ref=e30]: 测试场景
+          - menuitem "play-circle 测试执行" [ref=e31] [cursor=pointer]:
+            - img "play-circle" [ref=e32]:
+              - img [ref=e33]
+            - generic [ref=e36]: 测试执行
+          - menuitem "setting 系统配置" [ref=e37] [cursor=pointer]:
+            - img "setting" [ref=e38]:
+              - img [ref=e39]
+            - generic [ref=e41]: 系统配置
+        - menuitem "cluster MaaS平台" [ref=e42] [cursor=pointer]:
+          - img "cluster" [ref=e43]:
+            - img [ref=e44]
+          - generic [ref=e46]: MaaS平台
+    - img "left" [ref=e48] [cursor=pointer]:
+      - img [ref=e49]
+  - generic [ref=e51]:
+    - banner [ref=e52]
+    - main [ref=e53]:
+      - generic [ref=e348]:
+        - generic [ref=e349]:
+          - generic [ref=e351]:
+            - generic [ref=e352]: 执行详情
+            - button "left 返回列表" [ref=e354] [cursor=pointer]:
+              - img "left" [ref=e356]:
+                - img [ref=e357]
+              - generic [ref=e359]: 返回列表
+          - table [ref=e363]:
+            - rowgroup [ref=e364]:
+              - row "执行ID ef1d2d1b-42ad-42db-a1c6-f6668a4b9c2d 状态 完成" [ref=e365]:
+                - rowheader "执行ID" [ref=e366]
+                - cell "ef1d2d1b-42ad-42db-a1c6-f6668a4b9c2d" [ref=e367]
+                - rowheader "状态" [ref=e368]
+                - cell "完成" [ref=e369]:
+                  - generic [ref=e371]: 完成
+              - row "Agent ID d2855650-1a09-456b-9a8c-6edccdd3c650 场景 ID 6af38fff-a28d-4e1f-b341-068ef6bc3eb4" [ref=e372]:
+                - rowheader "Agent ID" [ref=e373]
+                - cell "d2855650-1a09-456b-9a8c-6edccdd3c650" [ref=e374]
+                - rowheader "场景 ID" [ref=e375]
+                - cell "6af38fff-a28d-4e1f-b341-068ef6bc3eb4" [ref=e376]
+              - row "Trace ID 019d14d4-c2e4-705d-a0a0-ad380b613481 比对分数 -" [ref=e377]:
+                - rowheader "Trace ID" [ref=e378]
+                - cell "019d14d4-c2e4-705d-a0a0-ad380b613481" [ref=e379]
+                - rowheader "比对分数" [ref=e380]
+                - cell "-" [ref=e381]
+              - row "比对结果 - 耗时 10.586s" [ref=e382]:
+                - rowheader "比对结果" [ref=e383]
+                - cell "-" [ref=e384]
+                - rowheader "耗时" [ref=e385]
+                - cell "10.586s" [ref=e386]
+              - row "创建时间 2026/3/22 17:16:20 完成时间 2026/3/22 17:16:31" [ref=e387]:
+                - rowheader "创建时间" [ref=e388]
+                - cell "2026/3/22 17:16:20" [ref=e389]
+                - rowheader "完成时间" [ref=e390]
+                - cell "2026/3/22 17:16:31" [ref=e391]
+        - generic [ref=e392]:
+          - generic [ref=e395]: Agent 原始请求内容
+          - generic [ref=e397]: 请简要介绍什么是人工智能？
+        - generic [ref=e398]:
+          - generic [ref=e401]: Agent 原始返回结果
+          - generic [ref=e403]: 第14次，这才是**终极答案**：
