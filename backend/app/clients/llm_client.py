@@ -49,11 +49,12 @@ class OpenAICompatibleLLMClient(LLMClient):
         }
 
     async def test_connection(self, model: LLMModel) -> tuple[bool, str]:
-        """测试连接 - use exactly what user provided"""
+        """测试连接 - 使用 OpenAI 标准 /models 端点"""
         try:
-            # Use the base_url directly - do not append /models
+            # OpenAI 标准：GET /v1/models 用来验证认证和端点可用性
+            test_url = f"{self.base_url}/models"
             async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(self.base_url, headers=self._get_headers())
+                response = await client.get(test_url, headers=self._get_headers())
                 if 200 <= response.status_code < 300:
                     return True, "Connection successful"
                 else:
@@ -67,9 +68,9 @@ class OpenAICompatibleLLMClient(LLMClient):
         actual: str,
         baseline: str
     ) -> tuple[float, bool, str]:
-        """调用 LLM 进行比对"""
-        # Use exactly what user provided - do not append any path
-        url = self.base_url
+        """调用 LLM 进行比对 - 使用 OpenAI 标准 /chat/completions 端点"""
+        # OpenAI 标准：POST /v1/chat/completions
+        url = f"{self.base_url}/chat/completions"
 
         messages = [
             {"role": "user", "content": prompt}
