@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 import json
 import httpx
 from typing import Tuple
+from app.core.logger import logger
 from app.domain.entities.llm import LLMModel
 
 
@@ -52,7 +53,12 @@ class OpenAICompatibleLLMClient(LLMClient):
         """测试连接 - 使用 OpenAI 标准 /models 端点"""
         try:
             # OpenAI 标准：GET /v1/models 用来验证认证和端点可用性
-            test_url = f"{self.base_url}/models"
+            # 如果 base_url 已经以 /chat/completions 结尾，说明用户把完整路径填过来了
+            # 去掉 /chat/completions 后再加上 /models
+            if self.base_url.endswith('/chat/completions'):
+                test_url = f"{self.base_url[:-18]}/models"
+            else:
+                test_url = f"{self.base_url}/models"
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.get(test_url, headers=self._get_headers())
                 if 200 <= response.status_code < 300:
@@ -69,8 +75,12 @@ class OpenAICompatibleLLMClient(LLMClient):
         baseline: str
     ) -> tuple[float, bool, str]:
         """调用 LLM 进行比对 - 使用 OpenAI 标准 /chat/completions 端点"""
-        # OpenAI 标准：POST /v1/chat/completions
-        url = f"{self.base_url}/chat/completions"
+        # 如果 base_url 已经以 /chat/completions 结尾，直接使用
+        # 否则自动添加 /chat/completions 路径
+        if self.base_url.endswith('/chat/completions'):
+            url = self.base_url
+        else:
+            url = f"{self.base_url}/chat/completions"
 
         messages = [
             {"role": "user", "content": prompt}
@@ -89,7 +99,12 @@ class OpenAICompatibleLLMClient(LLMClient):
                 json=payload,
                 headers=self._get_headers()
             )
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                # 记录响应正文帮助调试
+                logger.error(f"LLM request failed: {e}, response: {response.text}")
+                raise
             data = response.json()
 
         # 解析响应
@@ -116,3 +131,18 @@ class OpenAICompatibleLLMClient(LLMClient):
         except Exception as e:
             # 如果解析失败，默认认为失败
             return 0.0, False, f"Failed to parse LLM response: {content}"
+
+
+class DummyLLMClient(LLMClient):
+    """占位 LLM 客户端 - 当没有配置 LLM 时使用，所有 LLM 验证都得 0 分"""
+
+    async def test_connection(self, model: LLMModel) -> tuple[bool, str]:
+        return False, "No LLM configured"
+
+    async def compare(
+        self,
+        prompt: str,
+        actual: str,
+        baseline: str
+    ) -> tuple[float, bool, str]:
+        return 0.0, False, "LLM verification skipped (no LLM configured)"

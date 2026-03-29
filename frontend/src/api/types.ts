@@ -55,9 +55,15 @@ export interface Scenario {
   name: string
   description?: string
   prompt: string
+  baseline_tool_calls?: string  // JSON string
   baseline_result?: string
   compare_result: boolean
   compare_process: boolean
+  process_threshold: number  // 0-100
+  result_threshold: number   // 0-100
+  tool_count_tolerance: number
+  compare_enabled: boolean
+  enable_llm_verification: boolean
   created_at: string
   updated_at: string
 }
@@ -67,9 +73,15 @@ export interface ScenarioCreate {
   name: string
   description?: string
   prompt: string
+  baseline_tool_calls?: string
   baseline_result?: string
-  compare_result?: boolean
-  compare_process?: boolean
+  compare_result: boolean
+  compare_process: boolean
+  process_threshold?: number
+  result_threshold?: number
+  tool_count_tolerance?: number
+  compare_enabled?: boolean
+  enable_llm_verification?: boolean
 }
 
 export interface ScenarioUpdate extends Partial<ScenarioCreate> {}
@@ -132,4 +144,50 @@ export interface ClickHouseConfigUpdate {
 export interface TestResponse {
   success: boolean
   message: string
+}
+
+// 比对结果相关类型
+export interface SingleToolComparison {
+  tool_name: string
+  baseline_input: string
+  baseline_output: string
+  actual_input: string
+  actual_output: string
+  similarity: number  // 0-1
+  score: number      // 0-1
+  consistent: boolean
+  reason: string
+  matched: boolean
+}
+
+export interface SingleLLMComparison {
+  baseline_output: string
+  actual_output: string
+  similarity: number  // 0-1
+  score: number      // 0-1
+  consistent: boolean
+  reason: string
+}
+
+export interface DetailedComparisonResult {
+  id: string
+  execution_id: string
+  scenario_id: string
+  trace_id: string
+  process_score: number | null  // 0-100
+  result_score: number | null  // 0-100
+  overall_passed: boolean
+  tool_comparisons: SingleToolComparison[]
+  llm_comparison: SingleLLMComparison | null
+  status: string  // pending/processing/completed/failed
+  error_message: string | null
+  retry_count: number
+  created_at: string
+  updated_at: string
+  completed_at: string | null
+}
+
+export interface SetBaselineRequest {
+  scenario_id: string
+  execution_id: string
 }

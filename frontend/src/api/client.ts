@@ -103,8 +103,22 @@ export const executionApi = {
   getTrace: (id: string) => {
     return request.get<Response<any>>(`/v1/execution/${id}/trace`)
   },
+  getComparison: (id: string) => {
+    return request.get<Response<any>>(`/v1/execution/${id}/comparison`)
+  },
+  recompare: (id: string, llm_model_id?: string) => {
+    return request.post<Response<null>>(`/v1/execution/${id}/recompare`, {}, { params: { llm_model_id } })
+  },
   delete: (id: string) => {
     return request.delete<Response<null>>(`/v1/execution/${id}`)
+  }
+}
+
+// Scenario API 扩展
+export const scenarioApiExtended = {
+  ...scenarioApi,
+  setBaseline: (scenarioId: string, executionId: string) => {
+    return request.post<Response<null>>(`/v1/scenario/${scenarioId}/set-baseline/${executionId}`)
   }
 }
 

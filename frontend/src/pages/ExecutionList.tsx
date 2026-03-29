@@ -15,6 +15,7 @@ const STATUS_COLORS: Record<string, string> = {
   pulling_trace: 'cyan',
   comparing: 'purple',
   completed: 'green',
+  completed_with_mismatch: 'orange',
   failed: 'red',
 }
 
@@ -24,6 +25,7 @@ const STATUS_TEXT: Record<string, string> = {
   pulling_trace: '拉取 Trace',
   comparing: '结果比对',
   completed: '完成',
+  completed_with_mismatch: '完成(比对不通过)',
   failed: '失败',
 }
 
@@ -33,6 +35,7 @@ const ExecutionList: React.FC = () => {
   const [agents, setAgents] = useState<Agent[]>([])
   const [filteredScenarios, setFilteredScenarios] = useState<Scenario[]>([])
   const [modalScenarios, setModalScenarios] = useState<Scenario[]>([])
+  const [scenarioNames, setScenarioNames] = useState<Record<string, string>>({})
   const [selectedAgentId, setSelectedAgentId] = useState<string>('')
   const [selectedScenarioId, setSelectedScenarioId] = useState<string>('')
   const [loading, setLoading] = useState(false)
@@ -67,7 +70,23 @@ const ExecutionList: React.FC = () => {
         20,
         0
       )
-      setExecutions(res.data.items || [])
+      const items = res.data.items || []
+      setExecutions(items)
+
+      // 收集所有唯一 scenario_id，加载场景名称
+      const scenarioIds = [...new Set(items.map(item => item.scenario_id).filter(Boolean))]
+      const nameMap: Record<string, string> = {...scenarioNames}
+      // 只加载名称不存在的场景
+      const needLoad = scenarioIds.filter(id => !nameMap[id])
+      if (needLoad.length > 0) {
+        // 加载所有场景，然后过滤
+        const allRes = await scenarioApi.list()
+        const allScenarios = allRes.data || []
+        allScenarios.forEach(scenario => {
+          nameMap[scenario.id] = scenario.name
+        })
+      }
+      setScenarioNames(nameMap)
     } catch (e: any) {
       message.error(e.message)
     } finally {
@@ -146,6 +165,13 @@ const ExecutionList: React.FC = () => {
       key: 'status',
       width: 100,
       render: s => <Tag color={STATUS_COLORS[s] || 'gray'}>{STATUS_TEXT[s] || s}</Tag>,
+    },
+    {
+      title: '测试场景',
+      dataIndex: 'scenario_id',
+      key: 'scenario_name',
+      width: 200,
+      render: (scenario_id) => scenarioNames[scenario_id] || scenario_id,
     },
     {
       title: '比对分数',

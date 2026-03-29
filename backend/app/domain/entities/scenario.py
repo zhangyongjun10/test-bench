@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, Text, Boolean, DateTime, ForeignKey
+from sqlalchemy import Column, String, Text, Boolean, DateTime, ForeignKey, Double, Integer
 from sqlalchemy.dialects.postgresql import UUID
 from app.core.db import Base
 
@@ -17,9 +17,17 @@ class Scenario(Base):
     name = Column(String(255), nullable=False)
     description = Column(Text)
     prompt = Column(Text, nullable=False)
+    # 旧版比对字段（保留向后兼容）
     baseline_result = Column(Text)
     compare_result = Column(Boolean, nullable=False, default=True)
     compare_process = Column(Boolean, nullable=False, default=False)
+    # 新版基线相关字段
+    baseline_tool_calls = Column(Text)  # JSON 格式存储工具调用基线
+    process_threshold = Column(Double, nullable=False, default=60.0)  # 过程通过阈值
+    result_threshold = Column(Double, nullable=False, default=60.0)  # 结果通过阈值
+    tool_count_tolerance = Column(Integer, nullable=False, default=0)  # 工具次数容忍度
+    compare_enabled = Column(Boolean, nullable=False, default=True)  # 是否启用自动比对
+    enable_llm_verification = Column(Boolean, nullable=False, default=True)  # 是否启用 LLM 验证
     created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
     deleted_at = Column(DateTime(timezone=True))

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
-import { Table, Button, Space, Input, Modal, Form, message, Popconfirm, Select } from 'antd'
+import { Table, Button, Space, Input, Modal, Form, message, Popconfirm, Select, Divider, Switch, InputNumber } from 'antd'
+const { TextArea } = Input
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import type { Scenario, Agent } from '../api/types'
@@ -51,7 +52,13 @@ const ScenarioList: React.FC = () => {
     setIsEdit(false)
     setCurrentId('')
     form.resetFields()
-    form.setFieldsValue({ compare_result: true, compare_process: false })
+    form.setFieldsValue({
+      process_threshold: 60.0,
+      result_threshold: 60.0,
+      tool_count_tolerance: 0,
+      compare_enabled: true,
+      enable_llm_verification: true,
+    })
     setModalVisible(true)
   }
 
@@ -63,9 +70,13 @@ const ScenarioList: React.FC = () => {
       name: record.name,
       description: record.description,
       prompt: record.prompt,
+      baseline_tool_calls: record.baseline_tool_calls,
       baseline_result: record.baseline_result,
-      compare_result: record.compare_result,
-      compare_process: record.compare_process,
+      process_threshold: record.process_threshold ?? 60.0,
+      result_threshold: record.result_threshold ?? 60.0,
+      tool_count_tolerance: record.tool_count_tolerance ?? 0,
+      compare_enabled: record.compare_enabled ?? true,
+      enable_llm_verification: record.enable_llm_verification ?? true,
     })
     setModalVisible(true)
   }
@@ -224,22 +235,51 @@ const ScenarioList: React.FC = () => {
             <Input.TextArea placeholder="输入给 Agent 的问题/提示词" rows={4} />
           </Form.Item>
           <Form.Item name="baseline_result" label="基准预期结果">
-            <Input.TextArea placeholder="输入预期的输出结果，用于比对" rows={6} />
+            <Input.TextArea placeholder="输入预期的输出结果，用于结果比对" rows={6} />
           </Form.Item>
+          <Form.Item name="baseline_tool_calls" label="工具调用基线 (JSON)">
+            <Input.TextArea placeholder="JSON 格式，包含工具调用基线，例如: [{&quot;name&quot;: &quot;tool_name&quot;, &quot;input&quot;: &quot;...&quot;, &quot;output&quot;: &quot;...&quot;}]" rows={8} />
+          </Form.Item>
+          <Divider />
+          <div style={{ fontWeight: 'bold', marginBottom: 8 }}>比对配置</div>
           <Form.Item
-            name="compare_result"
+            name="compare_enabled"
             valuePropName="checked"
             initialValue={true}
+            label="启用自动比对"
           >
-            <div>比对输出结果</div>
+            <Switch />
           </Form.Item>
           <Form.Item
-            name="compare_process"
+            name="enable_llm_verification"
             valuePropName="checked"
-            initialValue={false}
+            initialValue={true}
+            label="启用 LLM 语义验证"
           >
-            <div>比对执行过程</div>
+            <Switch />
           </Form.Item>
+          <Form.Item
+            name="process_threshold"
+            label="过程通过阈值"
+            initialValue={60}
+          >
+            <InputNumber min={0} max={100} step={1} placeholder="0-100" style={{ width: 120 }} />
+          </Form.Item>
+          <Form.Item
+            name="result_threshold"
+            label="结果通过阈值"
+            initialValue={60}
+          >
+            <InputNumber min={0} max={100} step={1} placeholder="0-100" style={{ width: 120 }} />
+          </Form.Item>
+          <Form.Item
+            name="tool_count_tolerance"
+            label="工具次数容忍度"
+            initialValue={0}
+          >
+            <InputNumber min={0} step={1} placeholder="允许工具调用次数差异" style={{ width: 120 }} />
+          </Form.Item>
+          <Divider />
         </Form>
       </Modal>
     </div>

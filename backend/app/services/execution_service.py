@@ -140,26 +140,107 @@ class ExecutionService:
             execution.status = ExecutionStatus.COMPARING
             await self.repo.update(execution)
 
-            # 8. 比对
-            if scenario.compare_result and execution.original_response and scenario.baseline_result and execution.llm_model_id:
+            # 8. 详细比对（新）
+            overall_passed: Optional[bool] = None
+            final_score: Optional[float] = None
+
+            if scenario.compare_enabled and execution.llm_model_id:
+                from app.services.llm_service import LLMService
+                from app.domain.entities.comparison import ComparisonResult, ComparisonStatus
+                from app.domain.repositories.comparison_repo import SQLAlchemyComparisonRepository
+                from app.services.comparison import ComparisonService
+
+                try:
+                    llm_service = LLMService(self.session)
+                    llm_model = await llm_service.get_llm(execution.llm_model_id)
+
+                    if llm_model:
+                        # 获取完整 trace spans
+                        trace_fetcher = TraceFetcherImpl(self.session)
+                        spans = await trace_fetcher.fetch_spans(execution.trace_id)
+
+                        # 创建比对服务
+                        comparison_repo = SQLAlchemyComparisonRepository()
+                        comparison_service = ComparisonService(
+                            llm_service.get_client(llm_model),
+                            comparison_repo
+                        )
+
+                        # 执行详细比对
+                        comparison_result = await comparison_service.detailed_compare(
+                            scenario=scenario,
+                            execution=execution,
+                            trace_spans=spans,
+                        )
+
+                        # 保存比对结果
+                        await comparison_repo.create(self.session, comparison_result)
+                        logger.info(f"Detailed comparison done: process_score={comparison_result.process_score} result_score={comparison_result.result_score} overall_passed={comparison_result.overall_passed}")
+
+                        # 更新 execution 信息
+                        if comparison_result.process_score is not None and comparison_result.result_score is not None:
+                            final_score = (comparison_result.process_score + comparison_result.result_score) / 2
+                        elif comparison_result.process_score is not None:
+                            final_score = comparison_result.process_score
+                        elif comparison_result.result_score is not None:
+                            final_score = comparison_result.result_score
+                        else:
+                            final_score = None
+
+                        execution.comparison_score = final_score
+                        execution.comparison_passed = comparison_result.overall_passed
+                        overall_passed = comparison_result.overall_passed
+
+                        if final_score is not None:
+                            observe_comparison_score(final_score / 100.0)
+                except Exception as e:
+                    # 比对过程出错，记录失败但不影响 execution 状态（执行已经成功完成）
+                    logger.error(f"Detailed comparison failed for execution {execution_id}: {e}", exc_info=True)
+                    from app.domain.repositories.comparison_repo import SQLAlchemyComparisonRepository
+                    comparison_repo = SQLAlchemyComparisonRepository()
+                    # 创建失败的比对记录
+                    failed_comparison = ComparisonResult(
+                        execution_id=execution.id,
+                        scenario_id=scenario.id,
+                        trace_id=execution.trace_id,
+                        process_score=None,
+                        result_score=None,
+                        overall_passed=False,
+                        details_json=None,
+                        status=ComparisonStatus.FAILED,
+                        error_message=str(e),
+                        retry_count=0,
+                    )
+                    await comparison_repo.create(self.session, failed_comparison)
+                    # execution 保持 COMPLETED，因为执行已经成功完成，只是比对失败
+                    overall_passed = None
+                    execution.comparison_score = None
+                    execution.comparison_passed = None
+
+            # 兼容原有简单比对
+            elif scenario.compare_result and execution.original_response and scenario.baseline_result and execution.llm_model_id:
                 from app.services.llm_service import LLMService
                 llm_service = LLMService(self.session)
                 llm_model = await llm_service.get_llm(execution.llm_model_id)
 
                 if llm_model:
-                    comparison = ComparisonService(llm_service.get_client(llm_model))
+                    comparison = ComparisonService(llm_service.get_client(llm_model), None)
                     compare_result = await comparison.compare(
                         question=scenario.prompt,
                         actual=execution.original_response,
                         baseline=scenario.baseline_result
                     )
-                    execution.comparison_score = compare_result.score
+                    execution.comparison_score = compare_result.score * 100
                     execution.comparison_passed = compare_result.passed
+                    overall_passed = compare_result.passed
                     observe_comparison_score(compare_result.score)
-                    logger.info(f"Comparison done: score={compare_result.score} passed={compare_result.passed}")
+                    logger.info(f"Legacy comparison done: score={compare_result.score} passed={compare_result.passed}")
 
-            # 9. 完成
-            execution.status = ExecutionStatus.COMPLETED
+            # 9. 完成，设置最终状态
+            if overall_passed is False:
+                execution.status = ExecutionStatus.COMPLETED_WITH_MISMATCH
+            else:
+                execution.status = ExecutionStatus.COMPLETED
             execution.completed_at = datetime.utcnow()
             await self.repo.update(execution)
 

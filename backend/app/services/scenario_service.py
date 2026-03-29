@@ -36,6 +36,7 @@ class ScenarioService:
         scenario = await self.repo.get_by_id(scenario_id)
         if not scenario:
             return None
+        logger.info(f"Update scenario {scenario_id}: process_threshold={request.process_threshold}, result_threshold={request.result_threshold}")
 
         if request.agent_id is not None:
             scenario.agent_id = request.agent_id
@@ -47,6 +48,18 @@ class ScenarioService:
             scenario.prompt = request.prompt
         if request.baseline_result is not None:
             scenario.baseline_result = request.baseline_result
+        if request.baseline_tool_calls is not None:
+            scenario.baseline_tool_calls = request.baseline_tool_calls
+        if request.process_threshold is not None:
+            scenario.process_threshold = request.process_threshold
+        if request.result_threshold is not None:
+            scenario.result_threshold = request.result_threshold
+        if request.tool_count_tolerance is not None:
+            scenario.tool_count_tolerance = request.tool_count_tolerance
+        if request.compare_enabled is not None:
+            scenario.compare_enabled = request.compare_enabled
+        if request.enable_llm_verification is not None:
+            scenario.enable_llm_verification = request.enable_llm_verification
         if request.compare_result is not None:
             scenario.compare_result = request.compare_result
         if request.compare_process is not None:

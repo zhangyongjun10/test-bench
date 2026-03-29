@@ -36,4 +36,5 @@ class ExecutionStatus:
     PULLING_TRACE = "pulling_trace"
     COMPARING = "comparing"
     COMPLETED = "completed"
+    COMPLETED_WITH_MISMATCH = "completed_with_mismatch"
     FAILED = "failed"
