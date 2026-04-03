@@ -173,11 +173,20 @@ async def get_comparison(
 
 async def run_recompare(
     execution_id: UUID,
-    session: AsyncSession,
     llm_model_id: Optional[UUID] = None,
 ) -> None:
-    """后台任务：重新执行比对"""
-    from app.services.execution_service import ExecutionService
+    """后台任务：重新执行比对（自建独立 Session，不依赖请求 Session 生命周期）"""
+    from app.core.db import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as session:
+        await _run_recompare_with_session(session, execution_id, llm_model_id)
+
+
+async def _run_recompare_with_session(
+    session: AsyncSession,
+    execution_id: UUID,
+    llm_model_id: Optional[UUID] = None,
+) -> None:
     from app.domain.entities.comparison import ComparisonResult, ComparisonStatus
     from app.domain.repositories.comparison_repo import SQLAlchemyComparisonRepository
     from app.domain.repositories.scenario_repo import SQLAlchemyScenarioRepository
@@ -302,7 +311,7 @@ async def trigger_recompare(
     if not execution:
         return Response(code=404, message="Execution not found", data=None)
 
-    background_tasks.add_task(run_recompare, execution_id, session, llm_model_id)
+    background_tasks.add_task(run_recompare, execution_id, llm_model_id)
     return Response[RecompareResponse](data=RecompareResponse(
         success=True,
         message="Recompare triggered in background"

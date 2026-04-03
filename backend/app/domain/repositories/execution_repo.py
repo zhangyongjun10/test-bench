@@ -93,6 +93,16 @@ class SQLAlchemyExecutionRepository(ExecutionRepository):
         count_query = select(func.count()).select_from(ExecutionJob)
         data_query = select(ExecutionJob).order_by(desc(ExecutionJob.created_at))
 
+        # 过滤掉外键为 NULL 的脏记录（DB 约束未生效时遗留的无效数据）
+        count_query = count_query.where(
+            ExecutionJob.agent_id.isnot(None),
+            ExecutionJob.scenario_id.isnot(None)
+        )
+        data_query = data_query.where(
+            ExecutionJob.agent_id.isnot(None),
+            ExecutionJob.scenario_id.isnot(None)
+        )
+
         if agent_id:
             count_query = count_query.where(ExecutionJob.agent_id == agent_id)
             data_query = data_query.where(ExecutionJob.agent_id == agent_id)

@@ -19,8 +19,8 @@ class ExecutionResponse(BaseModel):
     """执行响应"""
 
     id: UUID
-    agent_id: UUID
-    scenario_id: UUID
+    agent_id: Optional[UUID]
+    scenario_id: Optional[UUID]
     llm_model_id: Optional[UUID]
     trace_id: Optional[str]
     status: str

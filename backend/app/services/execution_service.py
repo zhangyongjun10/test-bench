@@ -7,6 +7,7 @@ from typing import Optional
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import BackgroundTasks
+from app.core.db import AsyncSessionLocal
 from app.domain.entities.execution import ExecutionJob, ExecutionStatus
 from app.domain.entities.agent import Agent
 from app.domain.entities.scenario import Scenario
@@ -56,13 +57,13 @@ class ExecutionService:
         result = await self.repo.create(execution)
         logger.info(f"Created execution job: {result.id} trace_id={result.trace_id}")
 
-        # 触发异步执行
-        background_tasks.add_task(self.run_execution, result.id)
+        # 触发异步执行（用模块级函数，让后台任务自建独立 session）
+        background_tasks.add_task(_run_execution_background, result.id)
 
         return result.id
 
     async def run_execution(self, execution_id: UUID) -> None:
-        """后台执行：调用 Agent -> 拉 Trace -> 提取指标 -> 比对"""
+        """后台执行：调用 Agent -> 拉 Trace -> 提取指标 -> 比对（使用 self.session）"""
         from app.services.trace_fetcher import TraceFetcherImpl
         from app.services.metric_extractor import MetricExtractor
         from app.services.comparison import ComparisonService
@@ -124,10 +125,21 @@ class ExecutionService:
             execution.status = ExecutionStatus.PULLING_TRACE
             await self.repo.update(execution)
 
-            # 5. 拉取 Trace
+            # 5. 拉取 Trace（带重试，等待 Opik SDK 异步写入完成）
             logger.info(f"Pulling trace: {execution.trace_id} for execution {execution_id}")
             trace_fetcher = TraceFetcherImpl(self.session)
-            spans = await trace_fetcher.fetch_spans(execution.trace_id)
+            spans = []
+            _trace_retry_delays = [2, 4, 8, 15]  # 秒，累计最多等待 ~30s
+            for _attempt, _delay in enumerate([0] + _trace_retry_delays):
+                if _delay > 0:
+                    import asyncio as _asyncio
+                    logger.info(f"Trace not ready, waiting {_delay}s before retry ({_attempt}/{len(_trace_retry_delays)})...")
+                    await _asyncio.sleep(_delay)
+                spans = await trace_fetcher.fetch_spans(execution.trace_id)
+                if spans:
+                    break
+            if not spans:
+                logger.warning(f"No spans found for trace {execution.trace_id} after retries")
             logger.info(f"Pulled {len(spans)} spans for execution {execution_id}")
 
             # 6. 提取指标
@@ -155,11 +167,7 @@ class ExecutionService:
                     llm_model = await llm_service.get_llm(execution.llm_model_id)
 
                     if llm_model:
-                        # 获取完整 trace spans
-                        trace_fetcher = TraceFetcherImpl(self.session)
-                        spans = await trace_fetcher.fetch_spans(execution.trace_id)
-
-                        # 创建比对服务
+                        # 创建比对服务（复用已拉取的 spans，不重复查 ClickHouse）
                         comparison_repo = SQLAlchemyComparisonRepository()
                         comparison_service = ComparisonService(
                             llm_service.get_client(llm_model),
@@ -282,3 +290,10 @@ class ExecutionService:
         await self.repo.delete(execution_id)
         logger.info(f"Deleted execution: {execution_id}")
         return True
+
+
+async def _run_execution_background(execution_id: UUID) -> None:
+    """后台任务入口：创建独立 Session，不依赖 HTTP 请求的 Session 生命周期"""
+    async with AsyncSessionLocal() as session:
+        service = ExecutionService(session)
+        await service.run_execution(execution_id)

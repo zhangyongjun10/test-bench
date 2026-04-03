@@ -3,6 +3,7 @@
 from abc import ABC, abstractmethod
 from typing import List, Optional
 from uuid import UUID
+import json
 import time
 from app.domain.entities.trace import Span, SpanMetrics
 from app.clients.clickhouse_client import ClickHouseClient
@@ -166,7 +167,8 @@ class TraceFetcherImpl(TraceFetcher):
                 duration,
                 ttft,
                 input,
-                output
+                output,
+                usage
             FROM opik.spans
             WHERE trace_id = '{trace_id_escaped}'
             ORDER BY start_time ASC
@@ -182,7 +184,8 @@ class TraceFetcherImpl(TraceFetcher):
                 duration,
                 ttft,
                 input,
-                output
+                output,
+                usage
             FROM spans
             WHERE trace_id = '{trace_id_escaped}'
             ORDER BY start_time ASC
@@ -214,7 +217,8 @@ class TraceFetcherImpl(TraceFetcher):
                         duration,
                         ttft,
                         input,
-                        output
+                        output,
+                        usage
                     FROM opik.spans
                     WHERE trace_id = '{trace_id_escaped}'
                     ORDER BY start_time ASC
@@ -230,7 +234,8 @@ class TraceFetcherImpl(TraceFetcher):
                         duration,
                         ttft,
                         input,
-                        output
+                        output,
+                        usage
                     FROM spans
                     WHERE trace_id = '{trace_id_escaped}'
                     ORDER BY start_time ASC
@@ -250,15 +255,33 @@ class TraceFetcherImpl(TraceFetcher):
         spans = []
         for row in seen_span_ids.values():
             ttft_ms = row['ttft'] * 1000 if row['ttft'] is not None else None
+            duration_ms = int(row['duration']) if row['duration'] is not None else None
+
+            # 从 usage 字段提取 token 统计
+            input_tokens = 0
+            output_tokens = 0
+            usage_raw = row.get('usage')
+            if usage_raw:
+                try:
+                    usage = json.loads(usage_raw) if isinstance(usage_raw, str) else usage_raw
+                    input_tokens = int(usage.get('prompt_tokens', 0) or 0)
+                    output_tokens = int(usage.get('completion_tokens', 0) or 0)
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    pass
+
+            # 根据 duration 和 output_tokens 推算 TPOT
+            tpot_ms = None
+            if duration_ms is not None and output_tokens > 0:
+                tpot_ms = duration_ms / output_tokens
+
             metrics = SpanMetrics(
                 ttft_ms=ttft_ms,
-                tpot_ms=None,
-                input_tokens=0,
-                output_tokens=0,
+                tpot_ms=tpot_ms,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
                 cpu_usage=None,
                 memory_usage=None
             )
-            duration_ms = int(row['duration']) if row['duration'] is not None else None
 
             # start_time/end_time can be datetime objects from clickhouse_driver
             start_ms = None
