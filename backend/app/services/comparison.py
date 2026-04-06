@@ -21,8 +21,6 @@ from app.models.execution import ComparisonResult
 
 # 最大重试次数
 MAX_RETRIES = 3
-# LLM 并发限制
-MAX_CONCURRENT_LLM = 5
 # 相似度阈值：>= 0.9 直接满分跳过 LLM，< 0.9 调用 LLM 语义比对
 HIGH_SIM_THRESHOLD = 0.9
 # 最大长度截断
@@ -158,7 +156,6 @@ class ComparisonService:
     def __init__(self, llm_client: LLMClient, comparison_repo: ComparisonRepository):
         self.llm_client = llm_client
         self.comparison_repo = comparison_repo
-        self._semaphore = asyncio.Semaphore(MAX_CONCURRENT_LLM)
 
     async def detailed_compare(
         self,
@@ -430,31 +427,31 @@ class ComparisonService:
             return similarity, similarity > 0.5, f'LLM 验证已关闭，使用算法相似度 {similarity:.3f}'
 
         # 相似度 <= 0.9，调用 LLM 验证
-        async with self._semaphore:
-            for attempt in range(MAX_RETRIES):
-                try:
-                    prompt = self.TOOL_COMPARE_PROMPT.format(
-                        tool_name=tool_name,
-                        baseline_input=baseline_input,
-                        baseline_output=baseline_output,
-                        actual_input=actual_input,
-                        actual_output=actual_output,
-                    )
-                    start_time = time.time()
-                    # 注意：compare 已经包含了 prompt 构建、调用、解析全流程
-                    score, consistent, reason = await self.llm_client.compare(prompt, "", "")
-                    duration = time.time() - start_time
-                    observe_llm_compare_duration(duration)
-                    logger.debug(f'Tool LLM compare done: {tool_name}, score={score}')
-                    return score, consistent, reason
-                except Exception as e:
-                    if attempt == MAX_RETRIES - 1:
-                        logger.error(f'LLM compare failed after {MAX_RETRIES} retries: {e}')
-                        return 0.0, False, f'LLM 比对失败：已重试 {MAX_RETRIES} 次，错误: {str(e)}'
+        for attempt in range(MAX_RETRIES):
+            try:
+                prompt = self.TOOL_COMPARE_PROMPT.format(
+                    tool_name=tool_name,
+                    baseline_input=baseline_input,
+                    baseline_output=baseline_output,
+                    actual_input=actual_input,
+                    actual_output=actual_output,
+                )
+                start_time = time.time()
+                # 注意：compare 已经包含了 prompt 构建、调用、解析全流程
+                score, consistent, reason = await self.llm_client.compare(prompt, "", "")
+                duration = time.time() - start_time
+                observe_llm_compare_duration(duration)
+                logger.debug(f'Tool LLM compare done: {tool_name}, score={score}')
+                return score, consistent, reason
+            except Exception as e:
+                if attempt == MAX_RETRIES - 1:
+                    logger.error(f'LLM compare failed after {MAX_RETRIES} retries: {e}')
+                    return 0.0, False, f'LLM 比对失败：已重试 {MAX_RETRIES} 次，错误: {str(e)}'
                 # 指数退避
                 await asyncio.sleep(2 ** attempt)
 
         return 0.0, False, '重试耗尽仍失败'
+
 
     async def _compare_result(
         self,

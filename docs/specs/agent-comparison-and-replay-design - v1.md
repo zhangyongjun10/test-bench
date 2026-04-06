@@ -1,271 +1,9 @@
-# Agent 比对与回放功能设计
-
-**版本**: 1.0
-**日期**: 2026-04-02
-**整合自**: agent-regression-comparison-design.md + agent-trace-replay-design.md
-
----
-
-## 目录
-
-- [1. 功能概览与边界](#1-功能概览与边界)
-- [2. 共享基础设施](#2-共享基础设施)
-- [3. 回归比对（Regression Comparison）](#3-回归比对regression-comparison)
-- [4. 链路回放（Trace Replay）](#4-链路回放trace-replay)
-- [5. 数据库迁移清单](#5-数据库迁移清单)
-- [6. 关键文件清单](#6-关键文件清单)
-- [7. 验收测试要点](#7-验收测试要点)
-- [8. 后续迭代计划（不包含在 MVP 实现中）](#8-后续迭代计划不包含在-mvp-实现中)
-
----
-
-## 1. 功能概览与边界
-
-平台提供两种独立的比对分析能力，解决不同场景的问题：
-
-| 维度 | 回归比对 | 链路回放 |
-|------|---------|---------|
-| **核心问题** | "这次执行结果是否符合预期基线？" | "不同架构下LLM 模型，每步行为和最终结果是否一致？" |
-| **触发时机** | Agent 场景执行完成后自动触发 | 用户手动启动重放任务 |
-| **比对基准** | 人工设定的 `baseline_tool_calls` + `baseline_result` | 原始 trace 本身（每步 LLM span 输出）+ 可选 baseline |
-| **LLM 比对** | 只比最后一个 LLM 输出 vs baseline | 每步 LLM 输出逐步与原始比对 + 最终 vs baseline |
-| **过程比对** | 所有 span（tool + LLM）次数/匹配/输入输出 vs baseline | 不做（输入固定，无意义） |
-| **适用场景** | Agent 代码变更后验证功能正确性 | 替换底层 LLM 模型后验证行为稳定性 |
-
-**范围边界：**
-- ✅ 包含：单场景执行后的比对分析、结果持久化、前端可视化展示
-- ✅ 包含：比对失败后重新触发比对、一键更新基线
-- ❌ 不包含：多场景批量比对（Roadmap 后续迭代）
-
----
-
-## 2. 共享基础设施
-
-两个功能共用以下组件，不重复实现。
-
-### 2.1 比对算法（ComparisonService）
-
-**两阶段策略**（对所有文本比对统一适用）：
-
-1. **JSON 预处理**：内容以 `{` 或 `[` 开头时，去除 Markdown 包裹，解析后用 `sort_keys=True` 重新序列化，消除格式差异；解析失败则使用原文。
-2. **算法粗筛**：Levenshtein 编辑距离计算相似度
-
-| 相似度范围 | 处理方式 |
-|-----------|---------|
-| ≥ 0.9 | 直接满分 1.0，跳过 LLM 调用 |
-| < 0.9 | 调用 LLM 做语义验证 |
-
-**LLM 调用控制**：
-- 失败自动指数退避重试 3 次，仍失败该项得 0 分
-- `enable_llm_verification = false` 时跳过 LLM，只用算法相似度
-
-**超长内容处理**：单个字段超过 8000 字符时截断，截断处加 `[...truncated]` 标记。
-
-### 2.2 前端轮询约定
-
-- 轮询间隔：2 秒
-- 最大超时：2 分钟，超时停止轮询，提示用户手动刷新
-- 适用：比对状态轮询、重放进度轮询
-
-### 2.3 阈值配置
-
-阈值统一配置在 `scenarios` 表，两个功能共用，不新增全局配置字段：
-
-| 字段 | 默认值 | 回归比对用途 | 回放比对用途 |
-|------|--------|------------|------------|
-| `process_threshold` | 60.0 | tool 过程比对通过线 | llm_trace_score 通过线 |
-| `result_threshold` | 60.0 | LLM 结果比对通过线 | llm_baseline_score 通过线 |
-
----
-
-## 3. 回归比对（Regression Comparison）
-
-### 3.1 业务目标
-
-Agent 开发人员修改代码后，执行场景测试时自动验证：
-1. **过程一致性**：Tool 调用次数、输入输出是否和基线一致
-2. **结果一致性**：最终 LLM 输出是否和基线一致
-
-### 3.2 数据库设计
-
-#### 修改 `scenarios` 表（新增字段）
-
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `baseline_tool_calls` | Text (JSON) | NULL | 过程基线：JSON 数组，每个元素 `{name, input, output}` |
-| `baseline_result` | Text | NULL | 结果基线：最后一个 LLM 输出文本 |
-| `process_threshold` | Double | 60.0 | 过程分数通过阈值 |
-| `result_threshold` | Double | 60.0 | 结果分数通过阈值 |
-| `tool_count_tolerance` | Integer | 0 | tool 调用次数允许浮动范围。例如：基线 3 次，容忍 1 → 实际 2~4 次均通过第一步 |
-| `compare_enabled` | Boolean | true | false 时执行完成后不触发比对 |
-| `enable_llm_verification` | Boolean | true | false 时只做算法粗筛，节省 LLM 成本 |
-
-#### 修改 `ExecutionStatus` 枚举
-
-新增：`COMPLETED_WITH_MISMATCH = "completed_with_mismatch"`（执行成功但比对不通过）
-
-#### 新表：`comparison_results`
-
-| 字段 | 类型 | 可空 | 说明 |
-|------|------|------|------|
-| `id` | UUID | 否 | 主键 |
-| `execution_id` | UUID | 否 | FK → `execution_jobs.id`，索引 |
-| `scenario_id` | UUID | 否 | FK → `scenarios.id`，索引 |
-| `trace_id` | String | 是 | 关联的 trace ID |
-| `process_score` | Double | 是 | 过程分数 0-100，无 baseline_tool_calls 时为 NULL |
-| `result_score` | Double | 是 | 结果分数 0-100，无 baseline_result 时为 NULL |
-| `overall_passed` | Boolean | 是 | 总体是否通过 |
-| `details_json` | Text | 是 | 详细比对结果 JSON（每个 tool/llm 的比对详情） |
-| `status` | String | 否 | pending / processing / completed / failed |
-| `error_message` | Text | 是 | 比对失败原因 |
-| `retry_count` | Integer | 否 | 已重试次数，默认 0 |
-| `created_at` | DateTime(tz) | 否 | |
-| `updated_at` | DateTime(tz) | 否 | 自动更新 |
-| `completed_at` | DateTime(tz) | 是 | |
-
-**details_json 结构：**
-
-```json
-{
-  "tool_comparisons": [
-    {
-      "tool_name": "search",
-      "baseline_input": "...", "baseline_output": "...",
-      "actual_input": "...", "actual_output": "...",
-      "similarity": 0.85, "score": 0.9,
-      "consistent": true, "reason": "...", "matched": true
-    }
-  ],
-  "llm_comparison": {
-    "baseline_output": "...", "actual_output": "...",
-    "similarity": 0.92, "score": 0.95,
-    "consistent": true, "reason": "..."
-  }
-}
-```
-
-### 3.3 比对逻辑
-
-#### 过程比对（baseline_tool_calls 不为空时执行）
-
-1. **次数检查**：`abs(actual_count - baseline_count) > tool_count_tolerance` → 全部 tool 得 0 分，直接跳到汇总
-2. **最优匹配**（贪心算法，不要求顺序）：
-   - tool 名称不同直接跳过（得 0 分）
-   - 名称相同则计算 `sim = (input_sim + output_sim) / 2`
-   - 每个实际 tool 匹配相似度最高的未匹配基线 tool
-   - 未匹配到的 tool（双向）得 0 分，计入平均分
-3. 对每个匹配对执行两阶段策略（JSON 预处理 + 算法/LLM 评分）
-4. `process_score = avg(所有 tool 分数) * 100`
-
-#### 结果比对（baseline_result 不为空时执行）
-
-1. 取 trace 中**最后一个** LLM span 的 output
-2. 执行两阶段策略
-3. `result_score = score * 100`
-
-#### 汇总判定
-
-| 情况 | overall_passed |
-|------|---------------|
-| 只有过程比对 | `process_score >= process_threshold` |
-| 只有结果比对 | `result_score >= result_threshold` |
-| 两者都有 | `process_score >= process_threshold AND result_score >= result_threshold` |
-| 无基线 | NULL（不判定） |
-
-`overall_passed = false` → `execution.status = COMPLETED_WITH_MISMATCH`
-
-### 3.4 执行流程
-
-```
-执行完成 (status=COMPLETED)
-    │
-    ▼
-compare_enabled? ──false──→ 结束
-    │ true
-    ▼
-创建 comparison_results 记录 (status=pending)
-异步启动后台比对任务 (status=processing)
-    │
-    ├── 过程比对（baseline 非空，包含 tool + LLM spans）
-    │       │
-    │       ├── 次数检查 → diff > tolerance → process_score = 0
-    │       └── 次数正常 → 贪心最优匹配 → 逐 span 两阶段比对 → process_score = 平均分 × 100
-    │
-    └── 结果比对（baseline_result 非空）
-            │
-            └── 取最后一个 LLM span 输出 → 两阶段比对 → result_score = 分数 × 100
-    │
-    ▼
-计算 overall_passed （根据阈值判定）
-    │
-    ├── passed = true  →  execution.status 保持 COMPLETED
-    │
-    └── passed = false →  execution.status = COMPLETED_WITH_MISMATCH
-    │
-    ▼
-更新 comparison_results → status=completed，写入 details_json
-    │
-    ▼
-结束
-```
-
-**流程说明：**
-1. Agent 执行完成后自动触发比对（如果 `compare_enabled = true`）
-2. 过程比对和结果比对独立执行，分别计分
-3. 根据阈值判定 `overall_passed`，不通过则修改 execution 状态
-4. 所有详情写入 `comparison_results.details_json` 供前端展示
+# Agent 回放功能设计
 
 
+## 1. 链路回放（Trace Replay）
 
-### 3.5 基线管理
-
-**方式一：从执行一键设置**
-- 执行详情页点击"设为基线"
-- 自动从该执行的 trace 提取所有 tool span（name/input/output）和最后一个 LLM span output
-- 写入 `scenario.baseline_tool_calls` 和 `scenario.baseline_result`
-
-**方式二：手动编辑**
-- 场景编辑页直接编辑 JSON，支持微调
-- 清空 JSON 即可删除基线（无需专门清除按钮）
-
-### 3.6 API
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| GET | `/api/v1/execution/{id}/comparison` | 获取最新比对详情 |
-| POST | `/api/v1/execution/{id}/recompare` | 触发重新比对（后台） |
-| POST | `/api/v1/scenario/{id}/set-baseline/{execution_id}` | 将指定执行设为基线 |
-
-### 3.7 前端
-
-**ExecutionDetail.tsx**（新增"比对详情"卡片）：
-- 展示 `process_score` / `result_score`，分别标记通过/不通过
-- 展示 `overall_passed` 总体结论标签
-- Collapse 展开查看每个 tool 和 LLM 的比对详情
-- "重新比对"按钮 + "设为基线"按钮
-- `status = failed` 时展示错误 Alert
-
-**ScenarioEdit.tsx**（新增基线编辑区域）：
-- `baseline_tool_calls` JSON 编辑框
-- `baseline_result` 文本编辑框
-- `compare_enabled` / `enable_llm_verification` 开关
-
-### 3.8 设计决策
-
-| 决策点 | 结论 |
-|--------|------|
-| Tool 名称匹配 | 名称不同直接得 0 分，不进入输入输出比对 |
-| 匹配算法 | MVP 贪心算法，接口抽象，后续可替换为匈牙利算法 |
-| 比对失败时 execution 状态 | 保持 COMPLETED，只将 comparison 标记 failed（执行本身已成功） |
-| 基线更新后旧结果 | 旧比对结果不自动重算，用户手动触发重比对 |
-| 未匹配 tool 计分 | 得 0 分计入平均，惩罚少调用/多调用行为 |
-| 随机字段（UUID/时间戳） | MVP 不处理，后续迭代支持忽略规则配置 |
-
----
-
-## 4. 链路回放（Trace Replay）
-
-### 4.1 业务目标
+### 1.1 业务目标
 
 对已完成的执行，用指定的新 LLM 模型逐步重新执行每一个 LLM span，验证：
 1. **每步稳定性**：给定相同输入，新模型与原模型的输出是否语义一致（`llm_trace_score`）
@@ -276,7 +14,89 @@ compare_enabled? ──false──→ 结束
 - 工具调用跳过，使用原始输出，只存储用于前端链路展示
 - 不做 process_score（tool 次数/顺序）比对——输入固定则 tool 次数由原始 trace 决定，无比对意义
 
-### 4.2 数据库设计
+
+### 1.2 执行流程
+
+```
+用户提交重放请求 (原始执行ID + LLM模型ID)
+    │
+    ▼
+从 ClickHouse 拉取原始 trace 全量 spans
+    │
+    ▼
+拉取失败? ──是──→ 标记任务 failed 结束
+    │ 否
+    ▼
+LLM span 数量 > 上限(100)? ──是──→ 标记任务 failed 结束
+    │ 否
+    ▼
+创建 replay_tasks 记录 (status=queued)
+预生成所有 spans 到 replay_spans (tool 只存原始数据)
+    │
+    ▼
+后台启动 → status=running
+    │
+    ┌─────────────────────────────────────────────────────┐
+    │  逐一遍历每个 LLM span (按原始顺序)                  │
+    │        │                                           │
+    │        ▼                                           │
+    │   使用原始 input 调用新 LLM 模型                     │
+    │        │                                           │
+    │        ▼                                           │
+    │   记录重放输出 + 性能指标(ttft/tokens)           
+    │        │                                           │
+    │        ▼                                           │
+    │   立即比对：重放输出 vs 原始输出 → 两阶段评分          │
+    │        │                                           │
+    │        ▼                                           │
+    │   写入 replay_spans (comparison_score/consistent)    │
+    │        │                                           │
+    │        ▼                                           │
+    │   completed_llm_spans += 1                          │
+    │        │                                           │
+    │   ┌─────────────────────────────────────────────┐  │
+    │   │ 还有 LLM span? ──是──→ 回到循环开始继续下一个  │  │
+    │   └─────────────────────────────────────────────┘  │
+    └─────────────────────────────────────────────────────┘
+              │ 全部完成
+              ▼
+计算 aggregated_metrics (原始 vs 重放 性能对比)
+llm_trace_score = avg(所有 span 分数) × 100
+    │
+    ▼
+有 scenario_id + baseline_result? ──否──→ llm_baseline_score = NULL
+    │ 是
+    ▼
+取最后一个重放输出 vs baseline → 两阶段比对 → llm_baseline_score
+    │
+    ▼
+汇总判定 overall_passed (两个分数均达标则通过)
+    │
+    ▼
+创建 replay_comparison_results 记录 → 写入全部比对详情
+标记 replay_task → status=completed
+    │
+    ▼
+结束
+```
+
+**流程说明：**
+1. 用户从原始执行页面启动重放，选择目标 LLM 模型
+2. 从 ClickHouse 拉取原始 trace，提前校验失败则立即返回
+3. 预先生成所有 `replay_spans` 记录，tool span 只存原始数据用于展示
+4. **逐一遍历**每个 LLM span：用原始输入调用新模型 → 输出立即比对 → 更新进度
+5. 全部完成后计算聚合指标和总分，如有场景基线则额外比对最终输出
+6. 写入 `replay_comparison_results` 完成任务
+
+**关键特性：**
+- 单步失败不终止：单个 LLM span 调用失败得 0 分，继续执行后续步骤
+- 进度实时更新：前端轮询可看到 `completed_llm_spans / total_llm_spans`
+- 输入固定：每步都使用原始 `original_input`，不依赖前一步重放输出，保证比对条件一致
+
+**疑问难点：**
+- LLM-as-Judge根据语义来判断比对输出是否一致，用temperature=0，减少输出随机性
+
+### 1.3 数据库设计
 
 #### 新表：`replay_tasks`
 
@@ -387,87 +207,11 @@ class AggregatedMetrics:
 ]
 ```
 
-### 4.3 执行流程
-
-```
-用户提交重放请求 (原始执行ID + LLM模型ID)
-    │
-    ▼
-从 ClickHouse 拉取原始 trace 全量 spans
-    │
-    ▼
-拉取失败? ──是──→ 标记任务 failed 结束
-    │ 否
-    ▼
-LLM span 数量 > 上限(100)? ──是──→ 标记任务 failed 结束
-    │ 否
-    ▼
-创建 replay_tasks 记录 (status=queued)
-预生成所有 spans 到 replay_spans (tool 只存原始数据)
-    │
-    ▼
-后台启动 → status=running
-    │
-    ┌─────────────────────────────────────────────────────┐
-    │  逐一遍历每个 LLM span (按原始顺序)                  │
-    │        │                                           │
-    │        ▼                                           │
-    │   使用原始 input 调用新 LLM 模型                     │
-    │        │                                           │
-    │        ▼                                           │
-    │   记录重放输出 + 性能指标(ttft/tokens)           │
-    │        │                                           │
-    │        ▼                                           │
-    │   立即比对：重放输出 vs 原始输出 → 两阶段评分          │
-    │        │                                           │
-    │        ▼                                           │
-    │   写入 replay_spans (comparison_score/consistent)    │
-    │        │                                           │
-    │        ▼                                           │
-    │   completed_llm_spans += 1                          │
-    │        │                                           │
-    │   ┌─────────────────────────────────────────────┐  │
-    │   │ 还有 LLM span? ──是──→ 回到循环开始继续下一个  │  │
-    │   └─────────────────────────────────────────────┘  │
-    └─────────────────────────────────────────────────────┘
-              │ 全部完成
-              ▼
-计算 aggregated_metrics (原始 vs 重放 性能对比)
-llm_trace_score = avg(所有 span 分数) × 100
-    │
-    ▼
-有 scenario_id + baseline_result? ──否──→ llm_baseline_score = NULL
-    │ 是
-    ▼
-取最后一个重放输出 vs baseline → 两阶段比对 → llm_baseline_score
-    │
-    ▼
-汇总判定 overall_passed (两个分数均达标则通过)
-    │
-    ▼
-创建 replay_comparison_results 记录 → 写入全部比对详情
-标记 replay_task → status=completed
-    │
-    ▼
-结束
-```
-
-**流程说明：**
-1. 用户从原始执行页面启动重放，选择目标 LLM 模型
-2. 从 ClickHouse 拉取原始 trace，提前校验失败则立即返回
-3. 预先生成所有 `replay_spans` 记录，tool span 只存原始数据用于展示
-4. **逐一遍历**每个 LLM span：用原始输入调用新模型 → 输出立即比对 → 更新进度
-5. 全部完成后计算聚合指标和总分，如有场景基线则额外比对最终输出
-6. 写入 `replay_comparison_results` 完成任务
-
-**关键特性：**
-- 单步失败不终止：单个 LLM span 调用失败得 0 分，继续执行后续步骤
-- 进度实时更新：前端轮询可看到 `completed_llm_spans / total_llm_spans`
-- 输入固定：每步都使用原始 `original_input`，不依赖前一步重放输出，保证比对条件一致
 
 
 
-### 4.4 API
+
+### 1.4 API
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -488,7 +232,7 @@ llm_trace_score = avg(所有 span 分数) × 100
 }
 ```
 
-### 4.5 前端（ReplayDetail.tsx）
+### 1.5 前端（ReplayDetail.tsx）
 
 **1. 头部信息卡片**
 - 重放状态标签、进度条（completed_llm_spans / total_llm_spans）
@@ -526,7 +270,7 @@ llm_trace_score = avg(所有 span 分数) × 100
   └── ...
 ```
 
-### 4.6 设计决策
+### 1.6 设计决策
 
 | 决策点 | 结论 | 原因 |
 |--------|------|------|
@@ -541,9 +285,9 @@ llm_trace_score = avg(所有 span 分数) × 100
 | 超长 trace 保护 | LLM span 数量超过上限（建议 100）拒绝启动 | 防止单次重放耗时过长占满资源 |
 | 整体超时控制 | 单次重放任务超时（建议 30 分钟）自动终止 | 避免僵尸任务占用资源 |
 
-### 4.7 完整端到端重放模式（Full Agent Replay）
+### 2 完整端到端重放模式（Full Agent Replay）
 
-#### 4.7.1 业务目标
+#### 2.1 业务目标
 
 对已有的执行场景，**使用相同的初始用户prompt，重新完整启动一次Agent执行**，真实调用所有LLM和工具，验证：
 1. **路径稳定性**：最终执行路径（tool调用序列）是否和原始/基线一致
@@ -551,19 +295,10 @@ llm_trace_score = avg(所有 span 分数) × 100
 
 **适用场景**：
 - 架构重构后全链路回归验证
--  Agent提示词工程修改后验证整体行为
+- Agent提示词工程修改后验证整体行为
 - 依赖库版本升级后验证功能正确性
 
-#### 4.7.2 数据库设计修改
-
-**`replay_tasks` 表新增字段：**
-
-| 字段 | 类型 | 可空 | 说明 |
-|------|------|------|------|
-| `replay_mode` | String | 否 | `step_fixed_input`（逐step固定输入，默认）/ `full_agent`（完整端到端） |
-| `full_execution_id` | UUID | 是 | 完整重放产生的新执行job ID，FK → `execution_jobs.id` |
-
-#### 4.7.3 执行流程
+#### 2.2 执行流程
 
 ```
 用户启动完整端到端重放 → 指定LLM模型 + 比对基准
@@ -607,7 +342,7 @@ llm_trace_score = avg(所有 span 分数) × 100
 - 如果从**原始执行页面**启动 → 基准 = 原始执行的trace
 - 如果从**场景页面**启动 → 基准 = 场景基线 `baseline_tool_calls` + `baseline_result`
 
-#### 4.7.4 比对算法（完全复用回归比对）
+#### 2.3 比对算法（完全复用回归比对）
 
 | 步骤 | 算法 |
 |------|------|
@@ -621,7 +356,7 @@ llm_trace_score = avg(所有 span 分数) × 100
 - 顺序不同但内容都匹配 → 能正常配对，不影响得分 → 通过
 - 完全分叉 → 大量0分 → 低分不通过
 
-#### 4.7.5 设计决策
+#### 2.4 设计决策
 
 | 决策点 | 结论 | 原因 |
 |--------|------|------|
@@ -632,15 +367,15 @@ llm_trace_score = avg(所有 span 分数) × 100
 
 ---
 
-## 5. 数据库迁移清单
+#### 2.5 数据库设计修改
 
-| 迁移文件 | 内容 |
-|---------|------|
-| `0004_add_comparison_features.py` | 新建 `comparison_results` 表；修改 `scenarios` 表新增 7 个字段；修改 `ExecutionStatus` 枚举新增 `COMPLETED_WITH_MISMATCH` |
-| `0005_add_replay_tables.py` | 新建 `replay_tasks`、`replay_spans`、`replay_comparison_results` 三张表 |
-| `0006_add_replay_full_agent.py` | 修改 `replay_tasks` 表新增 `replay_mode`、`full_execution_id` 字段 |
+**`replay_tasks` 表新增字段：**
 
----
+| 字段 | 类型 | 可空 | 说明 |
+|------|------|------|------|
+| `replay_mode` | String | 否 | `step_fixed_input`（逐step固定输入，默认）/ `full_agent`（完整端到端） |
+| `full_execution_id` | UUID | 是 | 完整重放产生的新执行job ID，FK → `execution_jobs.id` |
+
 
 ## 6. 关键文件清单
 
