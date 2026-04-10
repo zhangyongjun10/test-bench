@@ -22,8 +22,22 @@ import type { Agent, Scenario } from '../api/types'
 const { TextArea } = Input
 
 const formatLocalTime = (value: string) => {
-  const date = new Date(value)
-  return new Date(date.getTime() + 8 * 60 * 60 * 1000).toLocaleString('zh-CN')
+  if (!value) {
+    return '-'
+  }
+  const isoLikeValue = value.includes('T') ? value : value.replace(' ', 'T')
+  const normalizedValue =
+    /(?:Z|[+-]\d{2}:\d{2})$/.test(isoLikeValue) ? isoLikeValue : `${isoLikeValue}Z`
+  return new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(new Date(normalizedValue))
 }
 
 const ScenarioList = () => {

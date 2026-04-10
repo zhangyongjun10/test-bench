@@ -33,8 +33,22 @@ const DEFAULT_COMPARISON_PROMPT = `请判断下面【基线输出】和【实际
 4. 只输出 JSON：{"consistent": boolean, "reason": string}`
 
 const formatLocalTime = (value: string) => {
-  const date = new Date(value)
-  return new Date(date.getTime() + 8 * 60 * 60 * 1000).toLocaleString('zh-CN')
+  if (!value) {
+    return '-'
+  }
+  const isoLikeValue = value.includes('T') ? value : value.replace(' ', 'T')
+  const normalizedValue =
+    /(?:Z|[+-]\d{2}:\d{2})$/.test(isoLikeValue) ? isoLikeValue : `${isoLikeValue}Z`
+  return new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(new Date(normalizedValue))
 }
 
 const LLMList = () => {

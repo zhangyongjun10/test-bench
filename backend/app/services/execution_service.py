@@ -1,6 +1,7 @@
 """Execution service."""
 
 import asyncio
+import json
 import time
 import uuid
 from datetime import UTC, datetime
@@ -27,6 +28,84 @@ from app.domain.repositories.execution_repo import (
 from app.domain.repositories.scenario_repo import SQLAlchemyScenarioRepository
 from app.models.execution import CreateExecutionRequest
 from app.services.llm_service import LLMService
+
+
+def has_comparable_llm_output(spans: list) -> bool:
+    """Return true when trace has an OpenAI LLM span with extractable output."""
+    from app.services.comparison import extract_llm_content
+
+    for span in spans:
+        if (getattr(span, "span_type", "") or "").lower() != "llm":
+            continue
+        if (getattr(span, "provider", "") or "").lower() != "openai":
+            continue
+        if extract_llm_content(getattr(span, "output", "") or "").strip():
+            return True
+    return False
+
+
+def has_tool_call_output(output: str) -> bool:
+    """Return true when an LLM output payload represents a tool call turn."""
+    if not output:
+        return False
+
+    try:
+        parsed = json.loads(output)
+    except json.JSONDecodeError:
+        return False
+
+    if not isinstance(parsed, dict):
+        return False
+
+    choices = parsed.get("choices")
+    if not isinstance(choices, list):
+        return False
+
+    for choice in choices:
+        if not isinstance(choice, dict):
+            continue
+        message = choice.get("message")
+        if isinstance(message, dict) and (message.get("tool_calls") or message.get("function_call")):
+            return True
+        delta = choice.get("delta")
+        if isinstance(delta, dict) and (delta.get("tool_calls") or delta.get("function_call")):
+            return True
+    return False
+
+
+def has_final_openai_llm_output(spans: list) -> bool:
+    """Return true when an OpenAI LLM span has final assistant text, not a tool call turn."""
+    from app.services.comparison import extract_llm_content
+
+    for span in spans:
+        if (getattr(span, "span_type", "") or "").lower() != "llm":
+            continue
+        if (getattr(span, "provider", "") or "").lower() != "openai":
+            continue
+        output = getattr(span, "output", "") or ""
+        if extract_llm_content(output).strip() and not has_tool_call_output(output):
+            return True
+    return False
+
+
+def count_openai_llm_spans(spans: list) -> int:
+    """Count OpenAI provider LLM spans used by the comparison flow."""
+    return sum(
+        1
+        for span in spans
+        if (getattr(span, "span_type", "") or "").lower() == "llm"
+        and (getattr(span, "provider", "") or "").lower() == "openai"
+    )
+
+
+def is_trace_ready_for_comparison(spans: list, expected_min_llm_count: int) -> bool:
+    """Trace is ready once final text is visible.
+
+    The minimum count is validated by the comparison result. It should not force
+    us to wait once the agent has already produced a final assistant response.
+    """
+    del expected_min_llm_count
+    return has_final_openai_llm_output(spans)
 
 
 class ExecutionService:
@@ -118,7 +197,8 @@ class ExecutionService:
 
             trace_fetcher = TraceFetcherImpl(self.session)
             spans = []
-            retry_delays = [0, 2, 4, 8, 15]
+            retry_delays = [0, 2, 4, 8, 15, 30]
+            expected_min_llm_count = scenario.llm_count_min or 0
             for index, delay in enumerate(retry_delays):
                 if delay:
                     logger.info(
@@ -129,11 +209,29 @@ class ExecutionService:
                     )
                     await asyncio.sleep(delay)
                 spans = await trace_fetcher.fetch_spans(execution.trace_id)
-                if spans:
+                if spans and (
+                    not scenario.compare_enabled
+                    or is_trace_ready_for_comparison(spans, expected_min_llm_count)
+                ):
                     break
+                if spans and scenario.compare_enabled:
+                    logger.info(
+                        (
+                            "Trace has %s spans and %s OpenAI LLM spans, "
+                            "but comparison is not ready yet for execution %s"
+                        ),
+                        len(spans),
+                        count_openai_llm_spans(spans),
+                        execution_id,
+                    )
 
             if not spans:
                 logger.warning("No spans found for trace %s after retries", execution.trace_id)
+            elif scenario.compare_enabled and not is_trace_ready_for_comparison(spans, expected_min_llm_count):
+                logger.warning(
+                    "Trace %s is not fully ready for comparison after retries",
+                    execution.trace_id,
+                )
             logger.info("Pulled %s spans for execution %s", len(spans), execution_id)
 
             extractor = MetricExtractor()

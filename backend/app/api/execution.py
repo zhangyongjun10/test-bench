@@ -1,5 +1,6 @@
 """Execution API"""
 
+import asyncio
 import json
 from typing import Any, Dict, List, Optional
 from uuid import UUID
@@ -20,7 +21,11 @@ from app.domain.entities.execution import ExecutionStatus
 from app.domain.repositories.execution_repo import SQLAlchemyExecutionRepository
 from app.domain.repositories.comparison_repo import SQLAlchemyComparisonRepository
 from app.domain.repositories.scenario_repo import SQLAlchemyScenarioRepository
-from app.services.execution_service import ExecutionService
+from app.services.execution_service import (
+    ExecutionService,
+    count_openai_llm_spans,
+    is_trace_ready_for_comparison,
+)
 from app.services.comparison import ComparisonService
 from app.services.trace_fetcher import TraceFetcherImpl
 from app.services.llm_service import LLMService
@@ -227,7 +232,33 @@ async def _run_recompare_with_session(
 
     # 获取 trace spans
     trace_fetcher = TraceFetcherImpl(session)
-    spans = await trace_fetcher.fetch_spans(execution.trace_id)
+    spans = []
+    retry_delays = [0, 2, 4, 8, 15, 30]
+    expected_min_llm_count = scenario.llm_count_min or 0
+    compare_enabled = getattr(scenario, "compare_enabled", True)
+    for index, delay in enumerate(retry_delays):
+        if delay:
+            logger.info(
+                "Trace not ready for recompare, waiting %ss before retry (%s/%s)...",
+                delay,
+                index,
+                len(retry_delays) - 1,
+            )
+            await asyncio.sleep(delay)
+
+        spans = await trace_fetcher.fetch_spans(execution.trace_id)
+        if not compare_enabled or is_trace_ready_for_comparison(spans, expected_min_llm_count):
+            break
+
+        logger.info(
+            (
+                "Trace has %s spans and %s OpenAI LLM spans, "
+                "but recompare is not ready yet for execution %s"
+            ),
+            len(spans),
+            count_openai_llm_spans(spans),
+            execution_id,
+        )
 
     # 获取 LLM client（如果需要）
     llm_service = LLMService(session)

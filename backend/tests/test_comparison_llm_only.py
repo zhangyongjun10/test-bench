@@ -8,7 +8,7 @@ from app.domain.entities.execution import ExecutionJob
 from app.domain.entities.llm import LLMModel
 from app.domain.entities.scenario import Scenario
 from app.domain.entities.trace import Span, SpanMetrics
-from app.services.comparison import ComparisonService
+from app.services.comparison import ComparisonService, extract_llm_content
 
 
 class FakeLLMClient:
@@ -83,6 +83,31 @@ def make_model(prompt: str = "compare {{baseline_result}} vs {{actual_result}}")
         api_key_encrypted="secret",
         comparison_prompt=prompt,
     )
+
+
+def test_extract_llm_content_ignores_openai_tool_call_only_output():
+    output = json.dumps(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "function": {
+                                    "name": "read",
+                                    "arguments": '{"path":"/app/skills/weather/SKILL.md"}',
+                                }
+                            }
+                        ],
+                    }
+                }
+            ]
+        },
+        ensure_ascii=False,
+    )
+
+    assert extract_llm_content(output) == ""
 
 
 @pytest.mark.asyncio

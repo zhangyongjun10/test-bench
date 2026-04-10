@@ -1,7 +1,7 @@
 """测试场景实体"""
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from sqlalchemy import Column, String, Text, Boolean, DateTime, ForeignKey, Double, Integer
 from sqlalchemy.dialects.postgresql import UUID
 from app.core.db import Base
@@ -30,6 +30,6 @@ class Scenario(Base):
     tool_count_tolerance = Column(Integer, nullable=False, default=0)  # 工具次数容忍度
     compare_enabled = Column(Boolean, nullable=False, default=True)  # 是否启用自动比对
     enable_llm_verification = Column(Boolean, nullable=False, default=True)  # 是否启用 LLM 验证
-    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
     deleted_at = Column(DateTime(timezone=True))

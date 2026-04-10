@@ -7,6 +7,12 @@ from fastapi import BackgroundTasks
 from app.clients.http_agent_client import HTTPAgentClient
 from app.models.execution import CreateExecutionRequest
 from app.services import execution_service as execution_service_module
+from app.services.execution_service import (
+    count_openai_llm_spans,
+    has_comparable_llm_output,
+    has_final_openai_llm_output,
+    is_trace_ready_for_comparison,
+)
 
 
 def test_http_agent_client_builds_openclaw_payload_with_user():
@@ -23,6 +29,72 @@ def test_http_agent_client_builds_openclaw_payload_with_user():
         "messages": [{"role": "user", "content": "hello"}],
         "user": "exec_abc",
     }
+
+
+def test_has_comparable_llm_output_requires_openai_output():
+    assert not has_comparable_llm_output(
+        [
+            SimpleNamespace(span_type="llm", provider="litellm", output='{"assistantTexts":["ignored"]}'),
+            SimpleNamespace(span_type="tool", provider=None, output="tool output"),
+        ]
+    )
+
+    assert not has_comparable_llm_output(
+        [
+            SimpleNamespace(span_type="llm", provider="openai", output=""),
+        ]
+    )
+
+    assert not has_comparable_llm_output(
+        [
+            SimpleNamespace(
+                span_type="llm",
+                provider="openai",
+                output=(
+                    '{"choices":[{"message":{"content":null,'
+                    '"tool_calls":[{"function":{"name":"read","arguments":"{}"}}]}}]}'
+                ),
+            ),
+        ]
+    )
+
+    assert has_comparable_llm_output(
+        [
+            SimpleNamespace(span_type="llm", provider="openai", output='{"choices":[{"message":{"content":"final"}}]}'),
+        ]
+    )
+
+
+def test_trace_ready_for_comparison_requires_final_openai_output_not_min_count():
+    spans = [
+        SimpleNamespace(span_type="llm", provider="litellm", output='{"assistantTexts":["ignored"]}'),
+        SimpleNamespace(
+            span_type="llm",
+            provider="openai",
+            output=(
+                '{"choices":[{"message":{"content":"planning",'
+                '"tool_calls":[{"function":{"name":"exec","arguments":"{}"}}]}}]}'
+            ),
+        ),
+        SimpleNamespace(span_type="tool", provider=None, output="tool output"),
+    ]
+
+    assert count_openai_llm_spans(spans) == 1
+    assert not has_final_openai_llm_output(spans)
+    assert not is_trace_ready_for_comparison(spans, expected_min_llm_count=2)
+    assert is_trace_ready_for_comparison(
+        [
+            *spans,
+            SimpleNamespace(span_type="llm", provider="openai", output='{"choices":[{"message":{"content":"final"}}]}'),
+        ],
+        expected_min_llm_count=2,
+    )
+    assert is_trace_ready_for_comparison(
+        [
+            SimpleNamespace(span_type="llm", provider="openai", output='{"choices":[{"message":{"content":"final"}}]}'),
+        ],
+        expected_min_llm_count=3,
+    )
 
 
 @pytest.mark.asyncio

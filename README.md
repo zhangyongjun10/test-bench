@@ -22,7 +22,7 @@ cd backend
 pip install -r requirements.txt
 
 # 启动开发服务器
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
 后端地址: http://localhost:8000

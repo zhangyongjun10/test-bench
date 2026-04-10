@@ -1,7 +1,7 @@
 """比对结果实体"""
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from sqlalchemy import Column, String, Text, ForeignKey, Double, Boolean, DateTime, Integer
 from sqlalchemy.dialects.postgresql import UUID
 from app.core.db import Base
@@ -31,6 +31,6 @@ class ComparisonResult(Base):
     status = Column(String(50), nullable=False, default=ComparisonStatus.PENDING)
     error_message = Column(Text)
     retry_count = Column(Integer, nullable=False, default=0)
-    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
     completed_at = Column(DateTime(timezone=True))

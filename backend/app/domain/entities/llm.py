@@ -1,7 +1,7 @@
 """LLM 模型实体"""
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from sqlalchemy import Column, String, Text, Integer, Double, Boolean, DateTime
 from sqlalchemy.dialects.postgresql import UUID
 from app.core.db import Base
@@ -22,6 +22,6 @@ class LLMModel(Base):
     max_tokens = Column(Integer, nullable=False, default=1024)
     comparison_prompt = Column(Text)
     is_default = Column(Boolean, nullable=False, default=False)
-    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
     deleted_at = Column(DateTime(timezone=True))

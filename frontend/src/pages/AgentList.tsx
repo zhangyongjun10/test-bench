@@ -112,9 +112,22 @@ const AgentList = () => {
       key: 'created_at',
       width: 180,
       render: (text: string) => {
-        // 后端存储的是 UTC 时间，转换为北京时间 (+8)
-        const d = new Date(text)
-        return new Date(d.getTime() + 8 * 60 * 60 * 1000).toLocaleString('zh-CN')
+        if (!text) {
+          return '-'
+        }
+        const isoLikeValue = text.includes('T') ? text : text.replace(' ', 'T')
+        const normalizedValue =
+          /(?:Z|[+-]\d{2}:\d{2})$/.test(isoLikeValue) ? isoLikeValue : `${isoLikeValue}Z`
+        return new Intl.DateTimeFormat('zh-CN', {
+          timeZone: 'Asia/Shanghai',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: false,
+        }).format(new Date(normalizedValue))
       },
     },
     {

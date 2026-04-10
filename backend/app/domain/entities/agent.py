@@ -1,7 +1,7 @@
 """Agent 实体"""
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from sqlalchemy import Column, String, Text, DateTime
 from sqlalchemy.dialects.postgresql import UUID
 from app.core.db import Base
@@ -18,6 +18,6 @@ class Agent(Base):
     base_url = Column(String(2048), nullable=False)
     api_key_encrypted = Column(Text, nullable=False)
     user_session = Column(String(255))
-    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
     deleted_at = Column(DateTime(timezone=True))

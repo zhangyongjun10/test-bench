@@ -1,5 +1,14 @@
 # 更新日志
 
+## 2026-04-10
+
+### 执行链路稳定性
+- 修复 Trace 尚未完整落库时可能提前进入比对的问题：执行链路现在会等待出现最终 `provider == "openai"` LLM 调用后再比对。最终 LLM 调用的判定规则为：该 LLM span 能提取到文本输出，并且同一个输出中不包含 `tool_calls` / `function_call`；纯工具调用 turn 不会被当作最终输出。
+- 明确 LLM 次数比对规则：等待只用于避免 Trace 异步落库导致的提前误判；一旦最终 LLM 文本已经出现，就立刻按当前 `provider == "openai"` 的 LLM span 实际数量做次数校验。如果实际数量低于场景最小值，会直接判定 LLM 调用次数检查未通过，不再为了凑满最小次数额外等待。
+- 重新比对也采用同一套 Trace ready 等待逻辑：后台任务会重新拉取 trace，并在出现最终 OpenAI LLM 文本后执行比对；如果等待结束后仍没有最终文本，则按当前 trace 生成新的比对结果。
+- 修复 OpenAI 纯工具调用响应被误识别为最终 LLM 输出的问题，避免把 `content = null` 且只有 `tool_calls` 的 span 当作最终输出。
+- 补充执行等待与 LLM 输出提取测试，覆盖纯工具调用 span、OpenAI provider 过滤和最小 LLM 次数等待。
+
 ## 2026-04-09
 
 ### LLM-only 回放比对重构

@@ -1,6 +1,6 @@
 """系统配置实体"""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from sqlalchemy import Column, String, Text, Integer, DateTime
 from app.core.db import Base
 
@@ -16,4 +16,4 @@ class SystemClickhouseConfig(Base):
     username = Column(String(255))
     password_encrypted = Column(Text)
     source_type = Column(String(50), nullable=False)
-    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))

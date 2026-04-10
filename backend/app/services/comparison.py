@@ -105,22 +105,26 @@ def extract_llm_content(output: str) -> str:
         extracted = extract_message_content(content)
         if extracted:
             return extracted
+        return ""
 
     if isinstance(parsed, dict):
         choices = parsed.get("choices")
-        if isinstance(choices, list) and choices:
-            first_choice = choices[0]
-            if isinstance(first_choice, dict):
-                message = first_choice.get("message")
+        if isinstance(choices, list):
+            parts: list[str] = []
+            for choice in choices:
+                if not isinstance(choice, dict):
+                    continue
+                message = choice.get("message")
                 if isinstance(message, dict):
                     extracted = extract_message_content(message.get("content"))
                     if extracted:
-                        return extracted
-                delta = first_choice.get("delta")
+                        parts.append(extracted)
+                delta = choice.get("delta")
                 if isinstance(delta, dict):
                     extracted = extract_message_content(delta.get("content"))
                     if extracted:
-                        return extracted
+                        parts.append(extracted)
+            return "\n".join(parts).strip()
 
     if isinstance(parsed, dict) and "output_text" in parsed:
         content = parsed["output_text"]

@@ -364,7 +364,13 @@ async def test_run_recompare_with_session_updates_comparison_and_execution(monke
 
         async def fetch_spans(self, trace_id):
             del trace_id
-            return [SimpleNamespace(span_type="llm", output='{"assistantTexts":["actual"]}')]
+            return [
+                SimpleNamespace(
+                    span_type="llm",
+                    provider="openai",
+                    output='{"assistantTexts":["actual"]}',
+                )
+            ]
 
     class FakeLLMService:
         def __init__(self, session):
