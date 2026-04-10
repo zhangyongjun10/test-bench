@@ -163,6 +163,7 @@ async def get_comparison(
         id=comparison.id,
         execution_id=comparison.execution_id,
         scenario_id=comparison.scenario_id,
+        llm_model_id=comparison.llm_model_id,
         trace_id=comparison.trace_id,
         process_score=comparison.process_score,
         result_score=comparison.result_score,
@@ -192,6 +193,67 @@ async def get_comparison(
     )
 
     return Response[DetailedComparisonResponse](data=response)
+
+
+@router.get("/{execution_id}/comparisons")
+async def list_comparisons(
+    execution_id: UUID,
+    session: AsyncSession = Depends(get_db)
+) -> Response[List[DetailedComparisonResponse]]:
+    """Return all comparison results for an execution, newest first."""
+    comparison_repo = SQLAlchemyComparisonRepository()
+    comparisons = await comparison_repo.list_by_execution_id(session, execution_id)
+
+    items: List[DetailedComparisonResponse] = []
+    for comparison in comparisons:
+        details: Dict[str, Any] = {
+            "tool_comparisons": [],
+            "llm_comparison": None,
+            "llm_count_check": None,
+            "final_output_comparison": None,
+        }
+        if comparison.details_json:
+            try:
+                details = json.loads(comparison.details_json)
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse details_json for comparison {comparison.id}: {e}")
+
+        items.append(
+            DetailedComparisonResponse(
+                id=comparison.id,
+                execution_id=comparison.execution_id,
+                scenario_id=comparison.scenario_id,
+                llm_model_id=comparison.llm_model_id,
+                trace_id=comparison.trace_id,
+                process_score=comparison.process_score,
+                result_score=comparison.result_score,
+                overall_passed=comparison.overall_passed,
+                tool_comparisons=details.get("tool_comparisons", []),
+                llm_comparison=details.get("llm_comparison"),
+                llm_count_check=details.get("llm_count_check"),
+                final_output_comparison=(
+                    details.get("final_output_comparison")
+                    or (
+                        {
+                            "baseline_output": details["llm_comparison"].get("baseline_output", ""),
+                            "actual_output": details["llm_comparison"].get("actual_output", ""),
+                            "consistent": details["llm_comparison"].get("consistent", False),
+                            "reason": details["llm_comparison"].get("reason", ""),
+                        }
+                        if isinstance(details.get("llm_comparison"), dict)
+                        else None
+                    )
+                ),
+                status=comparison.status,
+                error_message=comparison.error_message,
+                retry_count=comparison.retry_count,
+                created_at=comparison.created_at,
+                updated_at=comparison.updated_at,
+                completed_at=comparison.completed_at,
+            )
+        )
+
+    return Response[List[DetailedComparisonResponse]](data=items)
 
 
 async def run_recompare(
@@ -230,6 +292,31 @@ async def _run_recompare_with_session(
         logger.error(f"Scenario not found for recompare: {execution.scenario_id}")
         return
 
+    llm_service = LLMService(session)
+    llm_model = await llm_service.get_llm(llm_model_id)
+    if llm_model:
+        llm_client = llm_service.get_client(llm_model)
+    else:
+        logger.error(f"LLM model not found for recompare: {llm_model_id}")
+        return
+
+    comparison_repo = SQLAlchemyComparisonRepository()
+    comparison = ComparisonResult(
+        execution_id=execution.id,
+        scenario_id=scenario.id,
+        llm_model_id=llm_model_id,
+        trace_id=execution.trace_id,
+        process_score=None,
+        result_score=None,
+        overall_passed=False,
+        details_json=None,
+        status=ComparisonStatus.PROCESSING,
+        error_message=None,
+        retry_count=0,
+    )
+    await comparison_repo.create(session, comparison)
+    await session.commit()
+
     # 获取 trace spans
     trace_fetcher = TraceFetcherImpl(session)
     spans = []
@@ -260,33 +347,6 @@ async def _run_recompare_with_session(
             execution_id,
         )
 
-    # 获取 LLM client（如果需要）
-    llm_service = LLMService(session)
-    llm_model = await llm_service.get_llm(llm_model_id)
-    # 使用传入的 llm_model_id，如果没有则使用 execution 上的
-    if llm_model:
-        llm_client = llm_service.get_client(llm_model)
-    else:
-        logger.error(f"LLM model not found for recompare: {llm_model_id}")
-        return
-
-    # 创建新的比对记录，先设置为 processing
-    comparison_repo = SQLAlchemyComparisonRepository()
-    comparison = ComparisonResult(
-        execution_id=execution.id,
-        scenario_id=scenario.id,
-        trace_id=execution.trace_id,
-        process_score=None,
-        result_score=None,
-        overall_passed=False,
-        details_json=None,
-        status=ComparisonStatus.PROCESSING,
-        error_message=None,
-        retry_count=0,
-    )
-    await comparison_repo.create(session, comparison)
-    await session.commit()
-
     try:
         # 执行比对
         comparison_service = ComparisonService(
@@ -304,6 +364,7 @@ async def _run_recompare_with_session(
         comparison.process_score = completed_comparison.process_score
         comparison.result_score = completed_comparison.result_score
         comparison.overall_passed = completed_comparison.overall_passed
+        comparison.llm_model_id = completed_comparison.llm_model_id
         comparison.details_json = completed_comparison.details_json
         comparison.status = completed_comparison.status
         comparison.error_message = completed_comparison.error_message

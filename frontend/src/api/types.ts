@@ -189,6 +189,7 @@ export interface DetailedComparisonResult {
   id: string
   execution_id: string
   scenario_id: string
+  llm_model_id?: string | null
   trace_id: string
   process_score: number | null  // 0-100
   result_score: number | null  // 0-100

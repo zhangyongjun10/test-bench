@@ -272,6 +272,7 @@ class ComparisonService:
         return ComparisonResultEntity(
             execution_id=execution.id,
             scenario_id=scenario.id,
+            llm_model_id=llm_model.id,
             trace_id=execution.trace_id,
             process_score=None,
             result_score=None,

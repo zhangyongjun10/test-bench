@@ -9,6 +9,12 @@
 - 修复 OpenAI 纯工具调用响应被误识别为最终 LLM 输出的问题，避免把 `content = null` 且只有 `tool_calls` 的 span 当作最终输出。
 - 补充执行等待与 LLM 输出提取测试，覆盖纯工具调用 span、OpenAI provider 过滤和最小 LLM 次数等待。
 
+### 多次比对结果
+- `comparison_results` 新增 `llm_model_id`，记录每一次比对实际使用的模型；历史数据会回填为执行记录上的初始比对模型。
+- 新增 `GET /api/v1/execution/{id}/comparisons`，按时间倒序返回某次执行的全部比对结果，保留 `GET /api/v1/execution/{id}/comparison` 返回最新结果的兼容行为。
+- 执行详情页改为左侧比对历史、右侧选中比对详情；默认选中最新比对，也可以点击历史卡片查看不同模型产生的比对结果。
+- 执行详情页区分展示“首次比对模型”和“当前比对模型”，避免重新比对后仍误以为当前结果使用的是首次模型。
+
 ## 2026-04-09
 
 ### LLM-only 回放比对重构

@@ -138,6 +138,7 @@ async def test_detailed_compare_fails_when_llm_count_out_of_range():
     assert details["llm_count_check"]["passed"] is False
     assert "LLM" in details["final_output_comparison"]["reason"]
     assert client.prompts == []
+    assert result.llm_model_id is not None
 
 
 @pytest.mark.asyncio

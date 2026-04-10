@@ -511,6 +511,8 @@ const ExecutionDetail = () => {
   const [scenario, setScenario] = useState<Scenario | null>(null)
   const [trace, setTrace] = useState<ExecutionTrace | null>(null)
   const [comparisonDetail, setComparisonDetail] = useState<DetailedComparisonResult | null>(null)
+  const [comparisonHistory, setComparisonHistory] = useState<DetailedComparisonResult[]>([])
+  const [selectedComparisonId, setSelectedComparisonId] = useState<string>()
   const [llmModels, setLlmModels] = useState<LLMModel[]>([])
   const [selectedLlmId, setSelectedLlmId] = useState<string>()
   const [llmModalVisible, setLlmModalVisible] = useState(false)
@@ -524,6 +526,15 @@ const ExecutionDetail = () => {
       trace?.spans.filter(span => span.span_type !== 'llm' || span.provider === 'openai') ?? [],
     [trace],
   )
+  const getLlmModelName = (modelId?: string | null) => {
+    if (!modelId) {
+      return '-'
+    }
+    return llmNameMap[modelId] || modelId
+  }
+  const currentComparisonModelId = comparisonDetail?.llm_model_id || execution?.llm_model_id
+  const initialComparisonModelName = getLlmModelName(execution?.llm_model_id)
+  const currentComparisonModelName = getLlmModelName(currentComparisonModelId)
 
   const clearPolling = () => {
     if (pollRef.current != null) {
@@ -561,11 +572,20 @@ const ExecutionDetail = () => {
     return executionData
   }
 
-  const loadComparison = async (executionId: string) => {
+  const loadComparison = async (executionId: string, preferredComparisonId?: string) => {
     try {
-      const res = await executionApi.getComparison(executionId)
-      setComparisonDetail(res.data)
-      return !(res.data.status === 'pending' || res.data.status === 'processing')
+      const res = await executionApi.getComparisons(executionId)
+      const items = res.data || []
+      setComparisonHistory(items)
+      const selected =
+        items.find(item => item.id === (preferredComparisonId || selectedComparisonId)) ||
+        items[0] ||
+        null
+      setSelectedComparisonId(selected?.id)
+      setComparisonDetail(selected)
+
+      const latest = items[0]
+      return !latest || !(latest.status === 'pending' || latest.status === 'processing')
     } catch (error) {
       console.error('Failed to load comparison:', error)
       return true
@@ -621,7 +641,10 @@ const ExecutionDetail = () => {
         executionData.status === 'failed'
       ) {
         await loadTrace(id)
-        startPolling(id)
+        const comparisonDone = await loadComparison(id)
+        if (!comparisonDone) {
+          startPolling(id)
+        }
       }
     } catch (error) {
       console.error('Failed to load execution detail:', error)
@@ -671,6 +694,7 @@ const ExecutionDetail = () => {
       await executionApi.recompare(id, selectedLlmId)
       message.success('已触发重新比对')
       setComparisonDetail(null)
+      setSelectedComparisonId(undefined)
       startPolling(id)
     } catch (error: any) {
       message.error(error.message)
@@ -760,7 +784,8 @@ const ExecutionDetail = () => {
         >
           {[
             { label: '场景', value: scenario?.name || execution.scenario_id },
-            { label: '比对模型', value: execution.llm_model_id ? llmNameMap[execution.llm_model_id] || execution.llm_model_id : '-' },
+            { label: '首次比对模型', value: initialComparisonModelName },
+            { label: '当前比对模型', value: currentComparisonModelName },
             { label: '执行耗时', value: duration },
             { label: 'Trace ID', value: execution.trace_id || '-' },
           ].map(item => (
@@ -801,9 +826,8 @@ const ExecutionDetail = () => {
             <Tag color={STATUS_COLORS[execution.status] || 'default'}>{STATUS_TEXT[execution.status] || execution.status}</Tag>
           </Descriptions.Item>
           <Descriptions.Item label="测试场景">{scenario?.name || execution.scenario_id}</Descriptions.Item>
-          <Descriptions.Item label="比对模型">
-            {execution.llm_model_id ? llmNameMap[execution.llm_model_id] || execution.llm_model_id : '-'}
-          </Descriptions.Item>
+          <Descriptions.Item label="首次比对模型">{initialComparisonModelName}</Descriptions.Item>
+          <Descriptions.Item label="当前比对模型">{currentComparisonModelName}</Descriptions.Item>
           <Descriptions.Item label="本次 Session">{execution.user_session || '-'}</Descriptions.Item>
           <Descriptions.Item label="Trace ID">{execution.trace_id || '-'}</Descriptions.Item>
           <Descriptions.Item label="比对结果">
@@ -853,7 +877,14 @@ const ExecutionDetail = () => {
             <Button icon={<PushpinOutlined />} onClick={() => void handleSetBaseline()}>
               设为基线
             </Button>
-            <Button icon={<ReloadOutlined />} loading={comparisonLoading} onClick={() => setLlmModalVisible(true)}>
+            <Button
+              icon={<ReloadOutlined />}
+              loading={comparisonLoading}
+              onClick={() => {
+                setSelectedLlmId(currentComparisonModelId || execution.llm_model_id)
+                setLlmModalVisible(true)
+              }}
+            >
               重新比对
             </Button>
           </Space>
@@ -886,7 +917,129 @@ const ExecutionDetail = () => {
         )}
 
         {!comparisonLoading && comparisonDetail && (
-          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '280px minmax(0, 1fr)',
+              gap: 16,
+              alignItems: 'start',
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 10,
+                padding: 10,
+                borderRadius: 18,
+                background: 'linear-gradient(180deg, #f8fafc 0%, #edf4ff 100%)',
+                border: '1px solid #dbeafe',
+                alignSelf: 'start',
+                height: 'min(720px, calc(100vh - 180px))',
+                minHeight: 520,
+                position: 'sticky',
+                top: 12,
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ fontWeight: 800, color: '#0f172a' }}>比对历史</div>
+                <Tag color="blue" style={{ marginInlineEnd: 0 }}>{comparisonHistory.length} 次</Tag>
+              </div>
+              <div
+                style={{
+                  display: 'grid',
+                  alignContent: 'start',
+                  gap: 10,
+                  flex: 1,
+                  minHeight: 0,
+                  overflowY: 'auto',
+                  paddingRight: 2,
+                }}
+              >
+                {comparisonHistory.map((item, index) => {
+                  const isSelected = item.id === comparisonDetail.id
+                  const count = item.llm_count_check
+                  const final = item.final_output_comparison
+                  const modelName = getLlmModelName(item.llm_model_id || execution.llm_model_id)
+                  const statusColor =
+                    item.status === 'processing' || item.status === 'pending'
+                      ? '#2563eb'
+                      : item.overall_passed === true
+                        ? '#16a34a'
+                        : item.status === 'failed'
+                          ? '#dc2626'
+                          : '#d97706'
+
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedComparisonId(item.id)
+                        setComparisonDetail(item)
+                      }}
+                      style={{
+                        width: '100%',
+                        textAlign: 'left',
+                        cursor: 'pointer',
+                        borderRadius: 12,
+                        border: isSelected ? '1px solid #2563eb' : '1px solid #e5e7eb',
+                        background: isSelected ? '#eff6ff' : '#ffffff',
+                        boxShadow: isSelected
+                          ? '0 10px 22px rgba(37, 99, 235, 0.12)'
+                          : '0 4px 14px rgba(15, 23, 42, 0.04)',
+                        padding: 10,
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                        <span style={{ fontWeight: 800, color: '#0f172a' }}>
+                          {index === 0 ? '最新比对' : `历史比对 ${comparisonHistory.length - index}`}
+                        </span>
+                        <Tag
+                          color={item.overall_passed === true ? 'green' : item.status === 'failed' ? 'red' : 'orange'}
+                          style={{ marginInlineEnd: 0 }}
+                        >
+                          {item.status === 'processing' || item.status === 'pending'
+                            ? '处理中'
+                            : item.status === 'failed'
+                              ? '失败'
+                              : item.overall_passed === true
+                                ? '通过'
+                                : '未通过'}
+                        </Tag>
+                      </div>
+                      <div style={{ display: 'grid', gap: 4, color: '#475569', fontSize: 12 }}>
+                        <div>
+                          <span style={{ color: '#64748b' }}>模型：</span>
+                          <span style={{ color: '#0f172a', fontWeight: 700 }}>{modelName}</span>
+                        </div>
+                        <div>
+                          <span style={{ color: '#64748b' }}>时间：</span>
+                          {formatLocalTime(item.completed_at || item.created_at)}
+                        </div>
+                        {count && (
+                          <div>
+                            <span style={{ color: '#64748b' }}>LLM 次数：</span>
+                            <span style={{ color: count.passed ? '#16a34a' : '#dc2626', fontWeight: 700 }}>
+                              {count.actual_count} / {count.expected_min}-{count.expected_max}
+                            </span>
+                          </div>
+                        )}
+                        {final?.algorithm_similarity != null && (
+                          <div>
+                            <span style={{ color: '#64748b' }}>算法粗筛：</span>
+                            {final.algorithm_similarity.toFixed(3)}
+                          </div>
+                        )}
+                      </div>
+                      <div style={{ marginTop: 8, height: 3, borderRadius: 999, background: statusColor }} />
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+
+            <Space direction="vertical" size={16} style={{ width: '100%', minWidth: 0, overflow: 'hidden' }}>
             {comparisonDetail.status === 'failed' && (
               <Alert
                 type="error"
@@ -899,7 +1052,7 @@ const ExecutionDetail = () => {
             <div
               style={{
                 display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
                 gap: 14,
               }}
             >
@@ -940,6 +1093,19 @@ const ExecutionDetail = () => {
                     fontWeight: 800,
                   }}
                 />
+              </div>
+              <div
+                style={{
+                  padding: '18px 20px',
+                  borderRadius: 20,
+                  background: 'linear-gradient(135deg, #f8fafc 0%, #ffffff 100%)',
+                  border: '1px solid #e2e8f0',
+                }}
+              >
+                <div style={{ fontSize: 13, color: '#64748b', marginBottom: 8 }}>当前比对模型</div>
+                <div style={{ color: '#0f172a', fontWeight: 800, fontSize: 20, wordBreak: 'break-word' }}>
+                  {getLlmModelName(comparisonDetail.llm_model_id || execution.llm_model_id)}
+                </div>
               </div>
               {comparisonDetail.llm_count_check && (
                 <div
@@ -1004,12 +1170,28 @@ const ExecutionDetail = () => {
                   {formatVerificationMode(comparisonDetail.final_output_comparison.verification_mode)}
                 </Descriptions.Item>
                 <Descriptions.Item label="基线输出">
-                  <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                  <pre
+                    style={{
+                      margin: 0,
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-word',
+                      maxHeight: 220,
+                      overflow: 'auto',
+                    }}
+                  >
                     {extractDisplayOutput(comparisonDetail.final_output_comparison.baseline_output) || '-'}
                   </pre>
                 </Descriptions.Item>
                 <Descriptions.Item label="实际输出">
-                  <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                  <pre
+                    style={{
+                      margin: 0,
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-word',
+                      maxHeight: 220,
+                      overflow: 'auto',
+                    }}
+                  >
                     {extractDisplayOutput(comparisonDetail.final_output_comparison.actual_output) || '-'}
                   </pre>
                 </Descriptions.Item>
@@ -1017,7 +1199,8 @@ const ExecutionDetail = () => {
             ) : (
               <Alert type="info" showIcon message="暂无最终输出比对结果" />
             )}
-          </Space>
+            </Space>
+          </div>
         )}
       </Card>
 

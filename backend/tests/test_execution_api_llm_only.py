@@ -26,6 +26,7 @@ def make_comparison(details: dict) -> SimpleNamespace:
         id=uuid.uuid4(),
         execution_id=uuid.uuid4(),
         scenario_id=uuid.uuid4(),
+        llm_model_id=uuid.uuid4(),
         trace_id="trace-1",
         process_score=None,
         result_score=None,
@@ -84,6 +85,42 @@ async def test_get_comparison_returns_llm_only_fields(monkeypatch):
     assert response.data.final_output_comparison is not None
     assert response.data.final_output_comparison.consistent is True
     assert response.data.final_output_comparison.reason == "same meaning"
+    assert response.data.llm_model_id is not None
+
+
+@pytest.mark.asyncio
+async def test_list_comparisons_returns_newest_results_with_model_id(monkeypatch):
+    details = {
+        "tool_comparisons": [],
+        "llm_comparison": None,
+        "llm_count_check": {
+            "expected_min": 1,
+            "expected_max": 2,
+            "actual_count": 1,
+            "passed": True,
+        },
+        "final_output_comparison": {
+            "baseline_output": "baseline",
+            "actual_output": "actual",
+            "consistent": True,
+            "reason": "same meaning",
+        },
+    }
+    comparisons = [make_comparison(details), make_comparison(details)]
+
+    class FakeComparisonRepo:
+        async def list_by_execution_id(self, session, execution_id):
+            del session, execution_id
+            return comparisons
+
+    monkeypatch.setattr(execution_api, "SQLAlchemyComparisonRepository", lambda: FakeComparisonRepo())
+
+    response = await execution_api.list_comparisons(uuid.uuid4(), session=object())
+
+    assert response.code == 0
+    assert len(response.data) == 2
+    assert response.data[0].id == comparisons[0].id
+    assert response.data[0].llm_model_id == comparisons[0].llm_model_id
 
 
 @pytest.mark.asyncio
@@ -389,11 +426,12 @@ async def test_run_recompare_with_session_updates_comparison_and_execution(monke
             assert isinstance(comparison_repo, FakeComparisonRepo)
 
         async def detailed_compare(self, scenario, execution, trace_spans, llm_model):
-            del scenario, execution, trace_spans, llm_model
+            del scenario, execution, trace_spans
             return SimpleNamespace(
                 process_score=None,
                 result_score=None,
                 overall_passed=True,
+                llm_model_id=llm_model.id,
                 details_json='{"llm_count_check":{"passed":true},"final_output_comparison":{"consistent":true}}',
                 status="completed",
                 error_message=None,

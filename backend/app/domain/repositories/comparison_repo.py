@@ -24,6 +24,10 @@ class ComparisonRepository(ABC):
         """Return the latest comparison result for an execution."""
 
     @abstractmethod
+    async def list_by_execution_id(self, session: AsyncSession, execution_id: UUID) -> list[ComparisonResult]:
+        """Return all comparison results for an execution, newest first."""
+
+    @abstractmethod
     async def update(self, session: AsyncSession, comparison: ComparisonResult) -> ComparisonResult:
         """Persist updates to an existing comparison result."""
 
@@ -52,6 +56,15 @@ class SQLAlchemyComparisonRepository(ComparisonRepository):
         )
         result = await session.execute(stmt)
         return result.scalar_one_or_none()
+
+    async def list_by_execution_id(self, session: AsyncSession, execution_id: UUID) -> list[ComparisonResult]:
+        stmt = (
+            select(ComparisonResult)
+            .where(ComparisonResult.execution_id == execution_id)
+            .order_by(ComparisonResult.created_at.desc())
+        )
+        result = await session.execute(stmt)
+        return list(result.scalars().all())
 
     async def update(self, session: AsyncSession, comparison: ComparisonResult) -> ComparisonResult:
         await session.commit()

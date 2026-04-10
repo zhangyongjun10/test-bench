@@ -23,6 +23,7 @@ class ComparisonResult(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     execution_id = Column(UUID(as_uuid=True), ForeignKey("execution_jobs.id"), nullable=False, index=True)
     scenario_id = Column(UUID(as_uuid=True), ForeignKey("scenarios.id"), nullable=False, index=True)
+    llm_model_id = Column(UUID(as_uuid=True), ForeignKey("llm_models.id"), nullable=True, index=True)
     trace_id = Column(String(255))
     process_score = Column(Double)
     result_score = Column(Double)

@@ -84,6 +84,8 @@ export const executionApi = {
   getTrace: (id: string) => asResponse<ExecutionTrace>(request.get(`/v1/execution/${id}/trace`)),
   getComparison: (id: string) =>
     asResponse<DetailedComparisonResult>(request.get(`/v1/execution/${id}/comparison`)),
+  getComparisons: (id: string) =>
+    asResponse<DetailedComparisonResult[]>(request.get(`/v1/execution/${id}/comparisons`)),
   recompare: (id: string, llm_model_id: string) =>
     asResponse<RecompareResponse>(request.post(`/v1/execution/${id}/recompare`, {}, { params: { llm_model_id } })),
   delete: (id: string) => asResponse<null>(request.delete(`/v1/execution/${id}`)),
