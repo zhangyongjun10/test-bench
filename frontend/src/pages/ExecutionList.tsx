@@ -1,13 +1,11 @@
-import React, { useState, useEffect } from 'react'
-import { Table, Button, Space, Input, Modal, Form, message, Popconfirm, Tag, Select } from 'antd'
-import { PlusOutlined, EyeOutlined, DeleteOutlined, PlayCircleOutlined } from '@ant-design/icons'
-import { useNavigate } from 'react-router-dom'
+import { useEffect, useMemo, useState } from 'react'
+import { Button, Form, Modal, Popconfirm, Select, Space, Table, Tag, message } from 'antd'
+import { DeleteOutlined, EyeOutlined, PlusOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
-import type { ExecutionJob, Agent, Scenario } from '../api/types'
-import { executionApi } from '../api/client'
-import { agentApi } from '../api/client'
-import { scenarioApi } from '../api/client'
-import { llmApi } from '../api/client'
+import { useNavigate } from 'react-router-dom'
+
+import { agentApi, executionApi, llmApi, scenarioApi } from '../api/client'
+import type { Agent, ExecutionJob, LLMModel, Scenario } from '../api/types'
 
 const STATUS_COLORS: Record<string, string> = {
   queued: 'blue',
@@ -25,115 +23,107 @@ const STATUS_TEXT: Record<string, string> = {
   pulling_trace: '拉取 Trace',
   comparing: '结果比对',
   completed: '完成',
-  completed_with_mismatch: '完成(比对不通过)',
+  completed_with_mismatch: '完成（比对未通过）',
   failed: '失败',
 }
 
-const ExecutionList: React.FC = () => {
+const formatLocalTime = (value: string) => {
+  const date = new Date(value)
+  return new Date(date.getTime() + 8 * 60 * 60 * 1000).toLocaleString('zh-CN')
+}
+
+const ExecutionList = () => {
   const navigate = useNavigate()
   const [executions, setExecutions] = useState<ExecutionJob[]>([])
+  const [total, setTotal] = useState(0)
   const [agents, setAgents] = useState<Agent[]>([])
+  const [allScenarios, setAllScenarios] = useState<Scenario[]>([])
   const [filteredScenarios, setFilteredScenarios] = useState<Scenario[]>([])
-  const [modalScenarios, setModalScenarios] = useState<Scenario[]>([])
-  const [scenarioNames, setScenarioNames] = useState<Record<string, string>>({})
-  const [selectedAgentId, setSelectedAgentId] = useState<string>('')
-  const [selectedScenarioId, setSelectedScenarioId] = useState<string>('')
+  const [llms, setLlms] = useState<LLMModel[]>([])
+  const [selectedAgentId, setSelectedAgentId] = useState("")
+  const [selectedScenarioId, setSelectedScenarioId] = useState("")
+  const [currentPage, setCurrentPage] = useState(1)
+  const [pageSize, setPageSize] = useState(10)
   const [loading, setLoading] = useState(false)
   const [modalVisible, setModalVisible] = useState(false)
   const [form] = Form.useForm()
-  const [llms, setLlms] = useState<any[]>([])
+
+  const scenarioNameMap = useMemo(
+    () => Object.fromEntries(allScenarios.map(scenario => [scenario.id, scenario.name])),
+    [allScenarios],
+  )
+  const llmNameMap = useMemo(
+    () => Object.fromEntries(llms.map(model => [model.id, model.name])),
+    [llms],
+  )
 
   const loadAgents = async () => {
-    try {
-      const res = await agentApi.list()
-      setAgents(res.data || [])
-    } catch (e: any) {
-      message.error(e.message)
+    const res = await agentApi.list()
+    setAgents(res.data || [])
+  }
+
+  const loadScenarios = async () => {
+    const res = await scenarioApi.list()
+    const scenarios = res.data || []
+    setAllScenarios(scenarios)
+    if (selectedAgentId) {
+      setFilteredScenarios(scenarios.filter(scenario => scenario.agent_id === selectedAgentId))
+    } else {
+      setFilteredScenarios([])
     }
   }
 
   const loadLlms = async () => {
-    try {
-      const res = await llmApi.list()
-      setLlms(res.data || [])
-    } catch (e: any) {
-      message.error('加载模型列表失败: ' + e.message)
-    }
+    const res = await llmApi.list()
+    setLlms(res.data || [])
   }
 
-  const loadData = async () => {
+  const loadExecutions = async (page = currentPage, size = pageSize) => {
     setLoading(true)
     try {
       const res = await executionApi.list(
         selectedAgentId || undefined,
         selectedScenarioId || undefined,
-        20,
-        0
+        size,
+        (page - 1) * size,
       )
-      const items = res.data.items || []
-      setExecutions(items)
-
-      // 收集所有唯一 scenario_id，加载场景名称
-      const scenarioIds = [...new Set(items.map(item => item.scenario_id).filter(Boolean))]
-      const nameMap: Record<string, string> = {...scenarioNames}
-      // 只加载名称不存在的场景
-      const needLoad = scenarioIds.filter(id => !nameMap[id])
-      if (needLoad.length > 0) {
-        // 加载所有场景，然后过滤
-        const allRes = await scenarioApi.list()
-        const allScenarios = allRes.data || []
-        allScenarios.forEach(scenario => {
-          nameMap[scenario.id] = scenario.name
-        })
-      }
-      setScenarioNames(nameMap)
-    } catch (e: any) {
-      message.error(e.message)
+      setExecutions(res.data.items || [])
+      setTotal(res.data.total || 0)
+    } catch (error: any) {
+      message.error(error.message)
     } finally {
       setLoading(false)
     }
   }
 
-  const loadScenariosByAgent = async (agentId: string) => {
-    if (!agentId) {
-      setFilteredScenarios([])
-      setModalScenarios([])
-      return
-    }
-    try {
-      const res = await scenarioApi.list(agentId)
-      setFilteredScenarios(res.data || [])
-      setModalScenarios(res.data || [])
-    } catch (e: any) {
-      message.error(e.message)
-      setFilteredScenarios([])
-      setModalScenarios([])
-    }
-  }
-
   useEffect(() => {
-    loadAgents()
-    loadLlms()
-    loadData()
+    void Promise.all([loadAgents(), loadScenarios(), loadLlms(), loadExecutions()]).catch((error: any) => {
+      message.error(error.message)
+    })
   }, [])
 
-  const handleAgentChange = async (agentId: string) => {
-    setSelectedAgentId(agentId)
-    await loadScenariosByAgent(agentId)
-  }
+  useEffect(() => {
+    setCurrentPage(1)
+    void loadExecutions(1, pageSize)
+  }, [selectedAgentId, selectedScenarioId])
 
-  const handleCreate = () => {
-    form.resetFields()
-    setModalScenarios([])
-    setModalVisible(true)
-    // Ensure LLMs are loaded
-    if (llms.length === 0) {
-      loadLlms()
+  useEffect(() => {
+    if (selectedAgentId) {
+      setFilteredScenarios(allScenarios.filter(scenario => scenario.agent_id === selectedAgentId))
+    } else {
+      setFilteredScenarios([])
     }
+  }, [allScenarios, selectedAgentId])
+
+  const openCreateModal = () => {
+    form.resetFields()
+    setModalVisible(true)
   }
 
-  const handleModalAgentChange = async (agentId: string) => {
-    await loadScenariosByAgent(agentId)
+  const handleModalAgentChange = (agentId: string) => {
+    const scenarios = allScenarios.filter(scenario => scenario.agent_id === agentId)
+    setFilteredScenarios(scenarios)
+    form.setFieldValue('scenario_id', undefined)
   }
 
   const handleSubmit = async () => {
@@ -142,9 +132,13 @@ const ExecutionList: React.FC = () => {
       await executionApi.create(values)
       message.success('执行已触发')
       setModalVisible(false)
-      loadData()
-    } catch (e: any) {
-      message.error(e.message)
+      setCurrentPage(1)
+      await loadExecutions(1, pageSize)
+    } catch (error: any) {
+      if (error?.errorFields) {
+        return
+      }
+      message.error(error.message)
     }
   }
 
@@ -152,9 +146,11 @@ const ExecutionList: React.FC = () => {
     try {
       await executionApi.delete(id)
       message.success('删除成功')
-      loadData()
-    } catch (e: any) {
-      message.error(e.message)
+      const nextPage = executions.length === 1 && currentPage > 1 ? currentPage - 1 : currentPage
+      setCurrentPage(nextPage)
+      await loadExecutions(nextPage, pageSize)
+    } catch (error: any) {
+      message.error(error.message)
     }
   }
 
@@ -163,71 +159,55 @@ const ExecutionList: React.FC = () => {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
-      width: 100,
-      render: s => <Tag color={STATUS_COLORS[s] || 'gray'}>{STATUS_TEXT[s] || s}</Tag>,
+      width: 140,
+      render: value => <Tag color={STATUS_COLORS[value] || 'default'}>{STATUS_TEXT[value] || value}</Tag>,
     },
     {
       title: '测试场景',
       dataIndex: 'scenario_id',
-      key: 'scenario_name',
-      width: 200,
-      render: (scenario_id) => scenarioNames[scenario_id] || scenario_id,
+      key: 'scenario_id',
+      width: 220,
+      render: value => scenarioNameMap[value] || value,
     },
     {
-      title: '比对分数',
-      dataIndex: 'comparison_score',
-      key: 'comparison_score',
-      width: 100,
-      render: v => v?.toFixed(2),
+      title: '比对模型',
+      dataIndex: 'llm_model_id',
+      key: 'llm_model_id',
+      width: 220,
+      render: value => (value ? llmNameMap[value] || value : '-'),
     },
     {
       title: '比对结果',
       dataIndex: 'comparison_passed',
       key: 'comparison_passed',
-      width: 80,
-      render: v =>
-        v === true ? (
+      width: 120,
+      render: value =>
+        value === true ? (
           <Tag color="green">通过</Tag>
-        ) : v === false ? (
-          <Tag color="red">不通过</Tag>
-        ) : null,
-    },
-    {
-      title: '耗时',
-      key: 'duration',
-      width: 100,
-      render: (_, record) => {
-        if (!record.started_at || !record.completed_at) return '-'
-        return `${(new Date(record.completed_at).getTime() - new Date(record.started_at).getTime()) / 1000}s`
-      },
+        ) : value === false ? (
+          <Tag color="red">未通过</Tag>
+        ) : (
+          '-'
+        ),
     },
     {
       title: '创建时间',
       dataIndex: 'created_at',
       key: 'created_at',
-      width: 170,
-      render: (text: string) => {
-        // 后端存储的是 UTC 时间，转换为北京时间 (+8)
-        const d = new Date(text)
-        return new Date(d.getTime() + 8 * 60 * 60 * 1000).toLocaleString('zh-CN')
-      },
+      width: 180,
+      render: formatLocalTime,
     },
     {
       title: '操作',
       key: 'action',
-      width: 120,
+      width: 140,
       fixed: 'right',
       render: (_, record) => (
         <Space size="middle">
-          <Button
-            type="link"
-            size="small"
-            icon={<EyeOutlined />}
-            onClick={() => navigate(`/execution/${record.id}`)}
-          >
+          <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => navigate(`/execution/${record.id}`)}>
             详情
           </Button>
-          <Popconfirm title="确认删除吗？" onConfirm={() => handleDelete(record.id)}>
+          <Popconfirm title="确认删除这条执行记录吗？" onConfirm={() => void handleDelete(record.id)}>
             <Button type="link" size="small" danger icon={<DeleteOutlined />}>
               删除
             </Button>
@@ -242,63 +222,78 @@ const ExecutionList: React.FC = () => {
       <div style={{ marginBottom: 16, display: 'flex', gap: 16, alignItems: 'center' }}>
         <Select
           placeholder="筛选 Agent"
-          style={{ width: 200 }}
+          style={{ width: 220 }}
           allowClear
           value={selectedAgentId || undefined}
-          onChange={handleAgentChange}
-          options={agents.map(a => ({ label: a.name, value: a.id }))}
+          onChange={value => {
+            setSelectedAgentId(value || '')
+            setSelectedScenarioId('')
+          }}
+          options={agents.map(agent => ({ label: agent.name, value: agent.id }))}
         />
         <Select
           placeholder="筛选场景"
-          style={{ width: 200 }}
+          style={{ width: 220 }}
           allowClear
           value={selectedScenarioId || undefined}
-          onChange={setSelectedScenarioId}
-          options={filteredScenarios.map(s => ({ label: s.name, value: s.id }))}
+          onChange={value => setSelectedScenarioId(value || '')}
+          options={filteredScenarios.map(scenario => ({ label: scenario.name, value: scenario.id }))}
         />
-        <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>
+        <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
           触发执行
         </Button>
       </div>
+
       <Table
         columns={columns}
         dataSource={executions}
         loading={loading}
         rowKey="id"
-        pagination={{ pageSize: 10 }}
+        pagination={{
+          current: currentPage,
+          pageSize,
+          total,
+          showSizeChanger: true,
+          showTotal: value => `共 ${value} 条`,
+          onChange: (page, size) => {
+            const nextSize = size || pageSize
+            setCurrentPage(page)
+            setPageSize(nextSize)
+            void loadExecutions(page, nextSize)
+          },
+        }}
       />
+
       <Modal
         title="触发新执行"
         open={modalVisible}
-        onOk={handleSubmit}
+        onOk={() => void handleSubmit()}
         onCancel={() => setModalVisible(false)}
       >
         <Form form={form} layout="vertical">
-          <Form.Item
-            name="agent_id"
-            label="Agent"
-            rules={[{ required: true, message: '请选择 Agent' }]}
-          >
+          <Form.Item name="agent_id" label="Agent" rules={[{ required: true, message: '请选择 Agent' }]}>
             <Select
               placeholder="选择 Agent"
-              options={agents.map(a => ({ label: a.name, value: a.id }))}
+              options={agents.map(agent => ({ label: agent.name, value: agent.id }))}
               onChange={handleModalAgentChange}
             />
           </Form.Item>
-          <Form.Item
-            name="scenario_id"
-            label="测试场景"
-            rules={[{ required: true, message: '请选择场景' }]}
-          >
+
+          <Form.Item name="scenario_id" label="测试场景" rules={[{ required: true, message: '请选择场景' }]}>
             <Select
               placeholder="选择场景"
-              options={modalScenarios.map(s => ({ label: s.name, value: s.id }))}
+              options={filteredScenarios.map(scenario => ({ label: scenario.name, value: scenario.id }))}
             />
           </Form.Item>
-          <Form.Item name="llm_model_id" label="比对模型（默认使用默认模型）">
+
+          <Form.Item
+            name="llm_model_id"
+            label="比对模型"
+            rules={[{ required: true, message: '请选择比对模型' }]}
+          >
             <Select
               placeholder="选择比对模型"
-              options={llms.map(l => ({ label: l.name, value: l.id }))}
+              options={llms.map(model => ({ label: model.name, value: model.id }))}
             />
           </Form.Item>
         </Form>

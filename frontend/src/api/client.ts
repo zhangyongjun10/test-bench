@@ -1,138 +1,106 @@
 import axios from 'axios'
-import { Response } from './types'
+
+import type {
+  Agent,
+  AgentCreate,
+  AgentUpdate,
+  ClickHouseConfig,
+  ClickHouseConfigUpdate,
+  CreateExecutionRequest,
+  DetailedComparisonResult,
+  ExecutionJob,
+  ExecutionListData,
+  ExecutionTrace,
+  LLMCreate,
+  LLMModel,
+  LLMUpdate,
+  RecompareResponse,
+  Response,
+  Scenario,
+  ScenarioCreate,
+  ScenarioUpdate,
+  TestResponse,
+} from './types'
 
 const request = axios.create({
   baseURL: '/api',
   timeout: 30000,
 })
 
-// 响应拦截器
 request.interceptors.response.use(
   response => {
-    const data = response.data as Response<any>
+    const data = response.data as Response<unknown>
     if (data.code !== 0) {
       throw new Error(data.message)
     }
     return response.data
   },
-  error => {
-    return Promise.reject(error)
-  }
+  error => Promise.reject(error),
 )
 
-// Agent API
+const asResponse = <T>(promise: Promise<unknown>) => promise as Promise<Response<T>>
+
 export const agentApi = {
-  list: (keyword?: string) => {
-    return request.get<Response<Array<any>>>('/v1/agent', { params: { keyword } })
-  },
-  create: (data: any) => {
-    return request.post<Response<any>>('/v1/agent', data)
-  },
-  update: (id: string, data: any) => {
-    return request.put<Response<any>>(`/v1/agent/${id}`, data)
-  },
-  delete: (id: string) => {
-    return request.delete<Response<null>>(`/v1/agent/${id}`)
-  },
-  get: (id: string) => {
-    return request.get<Response<any>>(`/v1/agent/${id}`)
-  },
-  test: (id: string) => {
-    return request.post<Response<any>>(`/v1/agent/${id}/test`)
-  }
+  list: (keyword?: string) => asResponse<Agent[]>(request.get('/v1/agent', { params: { keyword } })),
+  create: (data: AgentCreate) => asResponse<Agent>(request.post('/v1/agent', data)),
+  update: (id: string, data: AgentUpdate) => asResponse<Agent>(request.put(`/v1/agent/${id}`, data)),
+  delete: (id: string) => asResponse<null>(request.delete(`/v1/agent/${id}`)),
+  get: (id: string) => asResponse<Agent>(request.get(`/v1/agent/${id}`)),
+  test: (id: string) => asResponse<TestResponse>(request.post(`/v1/agent/${id}/test`)),
 }
 
-// LLM API
 export const llmApi = {
-  list: (keyword?: string) => {
-    return request.get<Response<Array<any>>>('/v1/llm', { params: { keyword } })
-  },
-  create: (data: any) => {
-    return request.post<Response<any>>('/v1/llm', data)
-  },
-  update: (id: string, data: any) => {
-    return request.put<Response<any>>(`/v1/llm/${id}`, data)
-  },
-  delete: (id: string) => {
-    return request.delete<Response<null>>(`/v1/llm/${id}`)
-  },
-  get: (id: string) => {
-    return request.get<Response<any>>(`/v1/llm/${id}`)
-  },
-  test: (id: string) => {
-    return request.post<Response<any>>(`/v1/llm/${id}/test`)
-  }
+  list: (keyword?: string) => asResponse<LLMModel[]>(request.get('/v1/llm', { params: { keyword } })),
+  create: (data: LLMCreate) => asResponse<LLMModel>(request.post('/v1/llm', data)),
+  update: (id: string, data: LLMUpdate) => asResponse<LLMModel>(request.put(`/v1/llm/${id}`, data)),
+  delete: (id: string) => asResponse<null>(request.delete(`/v1/llm/${id}`)),
+  get: (id: string) => asResponse<LLMModel>(request.get(`/v1/llm/${id}`)),
+  test: (id: string) => asResponse<TestResponse>(request.post(`/v1/llm/${id}/test`)),
 }
 
-// Scenario API
 export const scenarioApi = {
   list: (agentId?: string, keyword?: string) => {
-    const params: any = { keyword }
+    const params: { keyword?: string; agent_id?: string } = { keyword }
     if (agentId) {
       params.agent_id = agentId
     }
-    return request.get<Response<Array<any>>>('/v1/scenario', { params })
+    return asResponse<Scenario[]>(request.get('/v1/scenario', { params }))
   },
-  create: (data: any) => {
-    return request.post<Response<any>>('/v1/scenario', data)
-  },
-  update: (id: string, data: any) => {
-    return request.put<Response<any>>(`/v1/scenario/${id}`, data)
-  },
-  delete: (id: string) => {
-    return request.delete<Response<null>>(`/v1/scenario/${id}`)
-  },
-  get: (id: string) => {
-    return request.get<Response<any>>(`/v1/scenario/${id}`)
-  }
+  create: (data: ScenarioCreate) => asResponse<Scenario>(request.post('/v1/scenario', data)),
+  update: (id: string, data: ScenarioUpdate) => asResponse<Scenario>(request.put(`/v1/scenario/${id}`, data)),
+  delete: (id: string) => asResponse<null>(request.delete(`/v1/scenario/${id}`)),
+  get: (id: string) => asResponse<Scenario>(request.get(`/v1/scenario/${id}`)),
 }
 
-// Execution API
 export const executionApi = {
-  create: (data: any) => {
-    return request.post<Response<string>>('/v1/execution', data)
-  },
-  list: (agentId?: string, scenarioId?: string, limit?: number, offset?: number) => {
-    return request.get<Response<{total: number, items: Array<any>}>>('/v1/execution', {
-      params: { agent_id: agentId, scenario_id: scenarioId, limit, offset }
-    })
-  },
-  get: (id: string) => {
-    return request.get<Response<any>>(`/v1/execution/${id}`)
-  },
-  getTrace: (id: string) => {
-    return request.get<Response<any>>(`/v1/execution/${id}/trace`)
-  },
-  getComparison: (id: string) => {
-    return request.get<Response<any>>(`/v1/execution/${id}/comparison`)
-  },
-  recompare: (id: string, llm_model_id?: string) => {
-    return request.post<Response<null>>(`/v1/execution/${id}/recompare`, {}, { params: { llm_model_id } })
-  },
-  delete: (id: string) => {
-    return request.delete<Response<null>>(`/v1/execution/${id}`)
-  }
+  create: (data: CreateExecutionRequest) => asResponse<string>(request.post('/v1/execution', data)),
+  list: (agentId?: string, scenarioId?: string, limit?: number, offset?: number) =>
+    asResponse<ExecutionListData>(
+      request.get('/v1/execution', {
+        params: { agent_id: agentId, scenario_id: scenarioId, limit, offset },
+      }),
+    ),
+  get: (id: string) => asResponse<ExecutionJob>(request.get(`/v1/execution/${id}`)),
+  getTrace: (id: string) => asResponse<ExecutionTrace>(request.get(`/v1/execution/${id}/trace`)),
+  getComparison: (id: string) =>
+    asResponse<DetailedComparisonResult>(request.get(`/v1/execution/${id}/comparison`)),
+  recompare: (id: string, llm_model_id: string) =>
+    asResponse<RecompareResponse>(request.post(`/v1/execution/${id}/recompare`, {}, { params: { llm_model_id } })),
+  delete: (id: string) => asResponse<null>(request.delete(`/v1/execution/${id}`)),
 }
 
-// Scenario API 扩展
 export const scenarioApiExtended = {
   ...scenarioApi,
-  setBaseline: (scenarioId: string, executionId: string) => {
-    return request.post<Response<null>>(`/v1/scenario/${scenarioId}/set-baseline/${executionId}`)
-  }
+  setBaseline: (scenarioId: string, executionId: string) =>
+    asResponse<null>(request.post(`/v1/scenario/${scenarioId}/set-baseline/${executionId}`)),
 }
 
-// System API
 export const systemApi = {
-  getClickhouse: () => {
-    return request.get<Response<any>>('/v1/system/clickhouse')
-  },
-  updateClickhouse: (data: any) => {
-    return request.post<Response<any>>('/v1/system/clickhouse', data)
-  },
-  testClickhouse: (data: any) => {
-    return request.post<Response<any>>('/v1/system/clickhouse/test', data)
-  }
+  getClickhouse: () => asResponse<ClickHouseConfig>(request.get('/v1/system/clickhouse')),
+  updateClickhouse: (data: ClickHouseConfigUpdate) =>
+    asResponse<ClickHouseConfig>(request.post('/v1/system/clickhouse', data)),
+  testClickhouse: (data: ClickHouseConfigUpdate) =>
+    asResponse<TestResponse>(request.post('/v1/system/clickhouse/test', data)),
 }
 
 export default request

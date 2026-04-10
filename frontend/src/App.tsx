@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Layout, Menu } from 'antd'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import {
@@ -9,15 +10,13 @@ import {
   CloudServerOutlined,
   ClusterOutlined,
 } from '@ant-design/icons'
-import React from 'react'
 
 const { Header, Sider, Content } = Layout
-const { SubMenu } = Menu
 
-const App: React.FC = () => {
+const App = () => {
   const navigate = useNavigate()
   const location = useLocation()
-  const [collapsed, setCollapsed] = React.useState(false)
+  const [collapsed, setCollapsed] = useState(false)
 
   const aaasMenuItems = [
     { key: '/agents', icon: <RobotOutlined />, label: 'Agent 管理' },
@@ -43,7 +42,6 @@ const App: React.FC = () => {
   ]
 
   // 默认展开 AaaS 平台
-  const openKeys = collapsed ? [] : ['aaas']
 
   // 默认选中第一个菜单项（Agent 管理）当路径为根路径或没有匹配时
   let selectedKey = location.pathname

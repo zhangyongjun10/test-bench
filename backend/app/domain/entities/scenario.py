@@ -19,6 +19,8 @@ class Scenario(Base):
     prompt = Column(Text, nullable=False)
     # 旧版比对字段（保留向后兼容）
     baseline_result = Column(Text)
+    llm_count_min = Column(Integer, nullable=False, default=0)
+    llm_count_max = Column(Integer, nullable=False, default=999)
     compare_result = Column(Boolean, nullable=False, default=True)
     compare_process = Column(Boolean, nullable=False, default=False)
     # 新版基线相关字段

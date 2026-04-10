@@ -1,9 +1,9 @@
 """比对结果模型"""
 
-from uuid import UUID
 from datetime import datetime
-from typing import Optional, List
-from pydantic import BaseModel
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class SingleToolComparison(BaseModel):
@@ -32,27 +32,48 @@ class SingleLLMComparison(BaseModel):
     reason: str
 
 
+class LLMCountCheck(BaseModel):
+    """LLM count range validation result."""
+
+    expected_min: int
+    expected_max: int
+    actual_count: int
+    passed: bool
+
+
+class FinalOutputComparison(BaseModel):
+    """Final output comparison result."""
+
+    baseline_output: str
+    actual_output: str
+    consistent: bool
+    reason: str
+    algorithm_similarity: float | None = None
+    verification_mode: str | None = None
+
+
 class DetailedComparisonResponse(BaseModel):
     """详细比对结果响应"""
 
     id: UUID
     execution_id: UUID
     scenario_id: UUID
-    trace_id: Optional[str]
-    process_score: Optional[float]  # 0-100
-    result_score: Optional[float]  # 0-100
-    overall_passed: bool
-    tool_comparisons: List[SingleToolComparison]
-    llm_comparison: Optional[SingleLLMComparison]
+    trace_id: str | None
+    process_score: float | None  # 0-100
+    result_score: float | None  # 0-100
+    overall_passed: bool | None
+    tool_comparisons: list[SingleToolComparison] = Field(default_factory=list)
+    llm_comparison: SingleLLMComparison | None = None
+    llm_count_check: LLMCountCheck | None = None
+    final_output_comparison: FinalOutputComparison | None = None
     status: str  # pending/processing/completed/failed
-    error_message: Optional[str]
+    error_message: str | None
     retry_count: int
     created_at: datetime
     updated_at: datetime
-    completed_at: Optional[datetime]
+    completed_at: datetime | None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class RecompareResponse(BaseModel):

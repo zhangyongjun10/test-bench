@@ -1,11 +1,11 @@
-import React, { useState, useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Table, Button, Space, Input, Modal, Form, message, Popconfirm } from 'antd'
-import { PlusOutlined, EditOutlined, DeleteOutlined, SearchOutlined, ExperimentOutlined } from '@ant-design/icons'
+import { PlusOutlined, EditOutlined, DeleteOutlined, ExperimentOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import type { Agent } from '../api/types'
 import { agentApi } from '../api/client'
 
-const AgentList: React.FC = () => {
+const AgentList = () => {
   const [agents, setAgents] = useState<Agent[]>([])
   const [keyword, setKeyword] = useState('')
   const [loading, setLoading] = useState(false)
@@ -44,7 +44,6 @@ const AgentList: React.FC = () => {
       name: record.name,
       description: record.description,
       base_url: record.base_url,
-      user_session: record.user_session,
     })
     setModalVisible(true)
   }
@@ -204,12 +203,6 @@ const AgentList: React.FC = () => {
             rules={[{ required: !isEdit, message: '请输入 API Key' }]}
           >
             <Input.Password placeholder="输入 API Key" />
-          </Form.Item>
-          <Form.Item
-            name="user_session"
-            label="用户 Session"
-          >
-            <Input placeholder="openclaw 用户会话标识" />
           </Form.Item>
         </Form>
       </Modal>

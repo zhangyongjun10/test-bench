@@ -1,4 +1,4 @@
-import React from 'react'
+import { StrictMode } from 'react'
 import ReactDOM from 'react-dom/client'
 import { BrowserRouter, useRoutes } from 'react-router-dom'
 import { ConfigProvider } from 'antd'
@@ -9,11 +9,11 @@ import './index.css'
 const Root = () => useRoutes(routes)
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
+  <StrictMode>
     <BrowserRouter>
       <ConfigProvider locale={zhCN}>
         <Root />
       </ConfigProvider>
     </BrowserRouter>
-  </React.StrictMode>,
+  </StrictMode>,
 )

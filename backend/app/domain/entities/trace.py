@@ -26,6 +26,7 @@ class Span:
     trace_id: str
     span_type: str  # llm | tool | runtime | http
     name: str
+    provider: Optional[str]
     input: Optional[str]
     output: Optional[str]
     start_time_ms: Optional[int]

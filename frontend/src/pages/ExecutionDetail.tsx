@@ -1,9 +1,31 @@
-import React, { useState, useEffect } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
-import { Card, Descriptions, Tag, Steps, Collapse, Alert, Spin, Result, Space, Button, Statistic, Divider, message, Select, Modal } from 'antd'
-import { CheckCircleOutlined, CloseCircleOutlined, LeftOutlined, ReloadOutlined, PushpinOutlined } from '@ant-design/icons'
-import { executionApi, scenarioApi, scenarioApiExtended, llmApi } from '../api/client'
-import type { ExecutionJob, ExecutionTrace, DetailedComparisonResult, LLMModel } from '../api/types'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
+import {
+  Alert,
+  Button,
+  Card,
+  Collapse,
+  Descriptions,
+  Modal,
+  Result,
+  Select,
+  Space,
+  Spin,
+  Statistic,
+  Tag,
+  Tabs,
+  message,
+} from 'antd'
+import { LeftOutlined, PushpinOutlined, ReloadOutlined } from '@ant-design/icons'
+
+import { executionApi, llmApi, scenarioApi, scenarioApiExtended } from '../api/client'
+import type {
+  DetailedComparisonResult,
+  ExecutionJob,
+  ExecutionTrace,
+  LLMModel,
+  Scenario,
+} from '../api/types'
 
 const STATUS_COLORS: Record<string, string> = {
   queued: 'blue',
@@ -21,92 +43,553 @@ const STATUS_TEXT: Record<string, string> = {
   pulling_trace: '拉取 Trace',
   comparing: '结果比对',
   completed: '完成',
-  completed_with_mismatch: '完成(比对不通过)',
+  completed_with_mismatch: '完成（比对未通过）',
   failed: '失败',
 }
 
-const POLL_INTERVAL = 2000  // 2 seconds
-const MAX_POLL_TIME = 2 * 60 * 1000  // 2 minutes
+const POLL_INTERVAL = 2000
+const MAX_POLL_TIME = 2 * 60 * 1000
 
-import type { Scenario } from '../api/types'
+const formatLocalTime = (value?: string | null) => {
+  if (!value) {
+    return '-'
+  }
+  const isoLikeValue = value.includes('T') ? value : value.replace(' ', 'T')
+  const normalizedValue =
+    /(?:Z|[+-]\d{2}:\d{2})$/.test(isoLikeValue) ? isoLikeValue : `${isoLikeValue}Z`
+  const date = new Date(normalizedValue)
+  return new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(date)
+}
 
-const ExecutionDetail: React.FC = () => {
+const extractDisplayOutput = (output?: string) => {
+  if (!output) {
+    return ''
+  }
+
+  try {
+    const parsed = JSON.parse(output)
+    if (parsed?.lastAssistant?.content) {
+      const content = parsed.lastAssistant.content
+      if (Array.isArray(content)) {
+        return content
+          .filter(item => item.type === 'text' && item.text)
+          .map(item => item.text)
+          .join('\n')
+      }
+      if (typeof content === 'string') {
+        return content
+      }
+      return JSON.stringify(content, null, 2)
+    }
+
+    if (Array.isArray(parsed?.assistantTexts)) {
+      return parsed.assistantTexts.join('\n')
+    }
+
+    if (Array.isArray(parsed?.choices) && parsed.choices.length > 0) {
+      const firstChoice = parsed.choices[0]
+      if (firstChoice?.message) {
+        const message = firstChoice.message
+        const textContent = extractTextContent(message.content)
+        if (textContent) {
+          return textContent
+        }
+        const toolCallSummary = extractToolCallSummary(message.tool_calls)
+        if (toolCallSummary) {
+          return toolCallSummary
+        }
+      }
+    }
+  } catch {
+    return output
+  }
+
+  return output
+}
+
+const formatVerificationMode = (mode?: string | null) => {
+  if (mode === 'algorithm_short_circuit') {
+    return '算法直通'
+  }
+  if (mode === 'llm_verification') {
+    return 'LLM 语义校验'
+  }
+  return mode || '-'
+}
+
+const SPAN_THEME = {
+  llm: {
+    tagColor: 'processing',
+    headerBg: '#eef6ff',
+    borderColor: '#91caff',
+  },
+  tool: {
+    tagColor: 'magenta',
+    headerBg: '#fff3f0',
+    borderColor: '#ffb199',
+  },
+  default: {
+    tagColor: 'default',
+    headerBg: '#f5f5f5',
+    borderColor: '#d9d9d9',
+  },
+} as const
+
+const getSpanTheme = (spanType?: string) => {
+  if (spanType === 'llm') {
+    return SPAN_THEME.llm
+  }
+  if (spanType === 'tool') {
+    return SPAN_THEME.tool
+  }
+  return SPAN_THEME.default
+}
+
+const stringifyPretty = (value?: string | null) => {
+  if (!value) {
+    return '-'
+  }
+  try {
+    return JSON.stringify(JSON.parse(value), null, 2)
+  } catch {
+    return value
+  }
+}
+
+const extractTextContent = (content: unknown): string => {
+  if (typeof content === 'string') {
+    return content
+  }
+
+  if (Array.isArray(content)) {
+    const textParts = content
+      .map(item => {
+        if (typeof item === 'string') {
+          return item
+        }
+        if (item && typeof item === 'object' && 'type' in item && item.type === 'text' && 'text' in item) {
+          return typeof item.text === 'string' ? item.text : ''
+        }
+        return ''
+      })
+      .filter(Boolean)
+
+    if (textParts.length > 0) {
+      return textParts.join('\n')
+    }
+  }
+
+  return ''
+}
+
+const extractToolCallSummary = (value: unknown): string => {
+  if (!Array.isArray(value) || value.length === 0) {
+    return ''
+  }
+
+  const summaries = value
+    .map(call => {
+      if (!call || typeof call !== 'object') {
+        return ''
+      }
+
+      const functionPayload =
+        'function' in call && call.function && typeof call.function === 'object' ? call.function : null
+      const functionName =
+        functionPayload && 'name' in functionPayload && typeof functionPayload.name === 'string'
+          ? functionPayload.name
+          : ''
+      const rawArguments =
+        functionPayload && 'arguments' in functionPayload && typeof functionPayload.arguments === 'string'
+          ? functionPayload.arguments
+          : ''
+
+      if (!rawArguments) {
+        return functionName ? `工具调用: ${functionName}` : ''
+      }
+
+      try {
+        const parsedArguments = JSON.parse(rawArguments)
+        if (parsedArguments && typeof parsedArguments === 'object') {
+          if ('command' in parsedArguments && typeof parsedArguments.command === 'string') {
+            return parsedArguments.command
+          }
+          if ('path' in parsedArguments && typeof parsedArguments.path === 'string') {
+            return `${functionName || '工具调用'}: ${parsedArguments.path}`
+          }
+        }
+      } catch {
+        return rawArguments
+      }
+
+      return rawArguments
+    })
+    .filter(Boolean)
+
+  return summaries.join('\n')
+}
+
+const extractToolCalls = (value: unknown): Array<{ name: string; content: string }> => {
+  if (!Array.isArray(value) || value.length === 0) {
+    return []
+  }
+
+  return value
+    .map(call => {
+      if (!call || typeof call !== 'object') {
+        return null
+      }
+
+      const functionPayload =
+        'function' in call && call.function && typeof call.function === 'object' ? call.function : null
+      const name =
+        functionPayload && 'name' in functionPayload && typeof functionPayload.name === 'string'
+          ? functionPayload.name
+          : 'tool_call'
+      const rawArguments =
+        functionPayload && 'arguments' in functionPayload && typeof functionPayload.arguments === 'string'
+          ? functionPayload.arguments
+          : ''
+
+      if (!rawArguments) {
+        return { name, content: '' }
+      }
+
+      try {
+        const parsedArguments = JSON.parse(rawArguments)
+        if (parsedArguments && typeof parsedArguments === 'object') {
+          if ('command' in parsedArguments && typeof parsedArguments.command === 'string') {
+            return { name, content: parsedArguments.command }
+          }
+          return { name, content: JSON.stringify(parsedArguments, null, 2) }
+        }
+      } catch {
+        return { name, content: rawArguments }
+      }
+
+      return { name, content: rawArguments }
+    })
+    .filter((item): item is { name: string; content: string } => Boolean(item))
+}
+
+const extractMessageBody = (message: unknown, fallback?: string) => {
+  if (!message || typeof message !== 'object') {
+    return fallback || ''
+  }
+
+  const textContent = 'content' in message ? extractTextContent(message.content) : ''
+  if (textContent) {
+    return textContent
+  }
+
+  const toolCallSummary = 'tool_calls' in message ? extractToolCallSummary(message.tool_calls) : ''
+  if (toolCallSummary) {
+    return toolCallSummary
+  }
+
+  return fallback || ''
+}
+
+const extractMessageTextOnly = (message: unknown, fallback?: string) => {
+  if (!message || typeof message !== 'object') {
+    return fallback || ''
+  }
+
+  const textContent = 'content' in message ? extractTextContent(message.content) : ''
+  return textContent || fallback || ''
+}
+
+const extractLLMMessages = (span: ExecutionTrace['spans'][number]) => {
+  const messages: Array<{ role: string; content: string; toolCalls?: Array<{ name: string; content: string }> }> = []
+
+  const pushMessage = (
+    role: string,
+    content?: string | null,
+    toolCalls?: Array<{ name: string; content: string }>,
+  ) => {
+    const text = (content || '').trim()
+    const calls = toolCalls || []
+    if (!text && calls.length === 0) {
+      return
+    }
+    messages.push({ role, content: text, toolCalls: calls })
+  }
+
+  if (span.input) {
+    try {
+      const parsed = JSON.parse(span.input)
+      if (Array.isArray(parsed)) {
+        for (const item of parsed) {
+          if (item && typeof item === 'object') {
+            const role = typeof item.role === 'string' ? item.role : 'input'
+            const toolCalls = 'tool_calls' in item ? extractToolCalls(item.tool_calls) : []
+            const content =
+              toolCalls.length > 0
+                ? extractMessageTextOnly(item)
+                : extractMessageBody(item, stringifyPretty(JSON.stringify(item)))
+            pushMessage(role, content, toolCalls)
+          }
+        }
+      } else if (parsed && typeof parsed === 'object') {
+        if (typeof parsed.systemPrompt === 'string') {
+          pushMessage('system', parsed.systemPrompt)
+        }
+        if (typeof parsed.prompt === 'string') {
+          pushMessage('user', parsed.prompt)
+        }
+      }
+    } catch {
+      pushMessage('input', span.input)
+    }
+  }
+
+  if (span.output) {
+    let outputHandled = false
+    try {
+      const parsedOutput = JSON.parse(span.output)
+      if (parsedOutput && typeof parsedOutput === 'object' && 'choices' in parsedOutput && Array.isArray(parsedOutput.choices)) {
+        const firstChoice = parsedOutput.choices[0]
+        if (firstChoice && typeof firstChoice === 'object' && 'message' in firstChoice) {
+          const message = firstChoice.message
+          const toolCalls =
+            message && typeof message === 'object' && 'tool_calls' in message
+              ? extractToolCalls(message.tool_calls)
+              : []
+          const content =
+            toolCalls.length > 0
+              ? extractMessageTextOnly(message)
+              : extractMessageBody(message)
+          pushMessage('assistant', content, toolCalls)
+          outputHandled = true
+        }
+      }
+    } catch {
+      // Ignore parse failure and fall back to display output extraction.
+    }
+
+    if (!outputHandled) {
+      const assistantOutput = extractDisplayOutput(span.output)
+      if (assistantOutput) {
+        pushMessage('assistant', assistantOutput)
+      }
+    }
+  }
+
+  return messages
+}
+
+const roleColorMap: Record<string, string> = {
+  system: '#597ef7',
+  user: '#13c2c2',
+  assistant: '#d48806',
+  tool: '#722ed1',
+  input: '#595959',
+}
+
+const roleLabelMap: Record<string, string> = {
+  system: 'System',
+  user: 'User',
+  assistant: 'Assistant',
+  tool: 'Tool',
+  input: 'Input',
+}
+
+const rolePanelBgMap: Record<string, string> = {
+  system: '#f0f5ff',
+  user: '#e6fffb',
+  assistant: '#fff7e6',
+  tool: '#f9f0ff',
+  input: '#fafafa',
+}
+
+const formatSpanDuration = (durationMs?: number | null) => {
+  if (durationMs == null) {
+    return '-'
+  }
+  if (durationMs >= 1000) {
+    return `${(durationMs / 1000).toFixed(1)}s`
+  }
+  return `${durationMs}ms`
+}
+
+const formatTokenUsage = (inputTokens?: number, outputTokens?: number) => {
+  const input = inputTokens ?? 0
+  const output = outputTokens ?? 0
+  const total = input + output
+  return `${total}(${input}+${output})`
+}
+
+const getDisplayCreatedAt = (execution: ExecutionJob) => {
+  if (!execution.created_at) {
+    return execution.created_at
+  }
+  if (!execution.started_at) {
+    return execution.created_at
+  }
+
+  const createdMs = new Date(execution.created_at).getTime()
+  const startedMs = new Date(execution.started_at).getTime()
+  const diffHours = (startedMs - createdMs) / (1000 * 60 * 60)
+
+  if (diffHours > 7.5 && diffHours < 8.5) {
+    return execution.started_at
+  }
+
+  return execution.created_at
+}
+
+const getOverallResultSummary = (comparisonDetail: DetailedComparisonResult) => {
+  const countPassed = comparisonDetail.llm_count_check?.passed
+  const outputConsistent = comparisonDetail.final_output_comparison?.consistent
+  const verificationMode = comparisonDetail.final_output_comparison?.verification_mode
+
+  if (comparisonDetail.overall_passed === true) {
+    if (verificationMode === 'algorithm_short_circuit') {
+      return 'LLM 调用次数检查通过，算法粗筛达到直通阈值，未再执行 LLM 语义校验。'
+    }
+    return 'LLM 调用次数检查通过，最终输出语义判断通过。'
+  }
+
+  if (comparisonDetail.overall_passed === false) {
+    if (countPassed === false) {
+      return 'LLM 调用次数检查未通过，未进入最终输出语义判断。'
+    }
+    if (outputConsistent === false) {
+      return '最终输出语义判断未通过。'
+    }
+  }
+
+  return '等待比对结果。'
+}
+
+const getOverallResultAlertType = (comparisonDetail: DetailedComparisonResult) => {
+  if (comparisonDetail.overall_passed === true) {
+    return 'success' as const
+  }
+  if (comparisonDetail.overall_passed === false) {
+    return 'warning' as const
+  }
+  return 'info' as const
+}
+
+const STATUS_SURFACE: Record<string, { glow: string; panel: string; border: string }> = {
+  queued: { glow: 'rgba(59, 130, 246, 0.16)', panel: '#eff6ff', border: '#93c5fd' },
+  running: { glow: 'rgba(249, 115, 22, 0.16)', panel: '#fff7ed', border: '#fdba74' },
+  pulling_trace: { glow: 'rgba(14, 165, 233, 0.16)', panel: '#ecfeff', border: '#67e8f9' },
+  comparing: { glow: 'rgba(168, 85, 247, 0.16)', panel: '#faf5ff', border: '#d8b4fe' },
+  completed: { glow: 'rgba(34, 197, 94, 0.16)', panel: '#f0fdf4', border: '#86efac' },
+  completed_with_mismatch: { glow: 'rgba(245, 158, 11, 0.16)', panel: '#fffbeb', border: '#fcd34d' },
+  failed: { glow: 'rgba(239, 68, 68, 0.14)', panel: '#fef2f2', border: '#fca5a5' },
+}
+
+const getStatusSurface = (status?: string) =>
+  STATUS_SURFACE[status || ''] || {
+    glow: 'rgba(148, 163, 184, 0.16)',
+    panel: '#f8fafc',
+    border: '#cbd5e1',
+  }
+
+const ExecutionDetail = () => {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const pollRef = useRef<number | null>(null)
+
   const [loading, setLoading] = useState(false)
-  const [execution, setExecution] = useState<ExecutionJob | null>(null)
-  const [scenarioName, setScenarioName] = useState<string>('')
-  const [scenario, setScenario] = useState<Scenario | null>(null)
-  const [trace, setTrace] = useState<ExecutionTrace | null>(null)
   const [traceLoading, setTraceLoading] = useState(false)
   const [comparisonLoading, setComparisonLoading] = useState(false)
-  const [comparisonDetail, setComparisonDetail] = useState<DetailedComparisonResult | null>(null)
   const [pollTimeout, setPollTimeout] = useState(false)
+  const [execution, setExecution] = useState<ExecutionJob | null>(null)
+  const [scenario, setScenario] = useState<Scenario | null>(null)
+  const [trace, setTrace] = useState<ExecutionTrace | null>(null)
+  const [comparisonDetail, setComparisonDetail] = useState<DetailedComparisonResult | null>(null)
   const [llmModels, setLlmModels] = useState<LLMModel[]>([])
-  const [selectedLlmId, setSelectedLlmId] = useState<string | undefined>(undefined)
-  const [llmLoading, setLlmLoading] = useState(false)
+  const [selectedLlmId, setSelectedLlmId] = useState<string>()
   const [llmModalVisible, setLlmModalVisible] = useState(false)
 
-  // 加载 LLM 模型列表
+  const llmNameMap = useMemo(
+    () => Object.fromEntries(llmModels.map(model => [model.id, model.name])),
+    [llmModels],
+  )
+  const visibleTraceSpans = useMemo(
+    () =>
+      trace?.spans.filter(span => span.span_type !== 'llm' || span.provider === 'openai') ?? [],
+    [trace],
+  )
+
+  const clearPolling = () => {
+    if (pollRef.current != null) {
+      window.clearInterval(pollRef.current)
+      pollRef.current = null
+    }
+  }
+
   const loadLlmModels = async () => {
-    setLlmLoading(true)
     try {
       const res = await llmApi.list()
       setLlmModels(res.data || [])
-    } catch (e) {
-      console.error('Failed to load LLM models:', e)
+    } catch (error) {
+      console.error('Failed to load LLM models:', error)
+    }
+  }
+
+  const loadTrace = async (executionId: string) => {
+    setTraceLoading(true)
+    try {
+      const res = await executionApi.getTrace(executionId)
+      setTrace(res.data)
+    } catch (error) {
+      console.error('Failed to load trace:', error)
     } finally {
-      setLlmLoading(false)
+      setTraceLoading(false)
     }
   }
 
-  const handleRecompareClick = () => {
-    // 如果已经有 llm_model_id，默认选中
-    if (execution?.llm_model_id && !selectedLlmId) {
-      setSelectedLlmId(execution.llm_model_id)
-    }
-    setLlmModalVisible(true)
+  const loadExecution = async (executionId: string) => {
+    const executionRes = await executionApi.get(executionId)
+    const executionData = executionRes.data
+    setExecution(executionData)
+    setSelectedLlmId(executionData.llm_model_id)
+    return executionData
   }
 
-  const confirmRecompare = async () => {
-    setLlmModalVisible(false)
+  const loadComparison = async (executionId: string) => {
     try {
-      await executionApi.recompare(id!, selectedLlmId)
-      startPolling()
-    } catch (e: any) {
-      console.error('Failed to trigger recompare:', e)
-    }
-  }
-
-  useEffect(() => {
-    loadLlmModels()
-  }, [])
-
-  const loadComparison = async () => {
-    if (!id) return
-    try {
-      const res = await executionApi.getComparison(id)
+      const res = await executionApi.getComparison(executionId)
       setComparisonDetail(res.data)
-      // 如果还在处理中，继续轮询
-      if (res.data.status === 'pending' || res.data.status === 'processing') {
-        return false
-      }
-      return true
-    } catch (e: any) {
-      console.error('Failed to load comparison:', e)
+      return !(res.data.status === 'pending' || res.data.status === 'processing')
+    } catch (error) {
+      console.error('Failed to load comparison:', error)
       return true
     }
   }
 
-  const startPolling = () => {
+  const startPolling = (executionId: string) => {
+    clearPolling()
     setPollTimeout(false)
     setComparisonLoading(true)
     const startTime = Date.now()
-    const interval = setInterval(async () => {
-      const done = await loadComparison()
+
+    pollRef.current = window.setInterval(async () => {
+      const done = await loadComparison(executionId)
       if (done || Date.now() - startTime > MAX_POLL_TIME) {
-        clearInterval(interval)
+        clearPolling()
         setComparisonLoading(false)
+        if (done) {
+          try {
+            await loadExecution(executionId)
+          } catch (error) {
+            console.error('Failed to refresh execution after comparison:', error)
+          }
+        }
         if (Date.now() - startTime > MAX_POLL_TIME) {
           setPollTimeout(true)
         }
@@ -114,69 +597,85 @@ const ExecutionDetail: React.FC = () => {
     }, POLL_INTERVAL)
   }
 
-
-  const handleSetBaseline = async () => {
-    if (!id || !execution) return
-    try {
-      await scenarioApiExtended.setBaseline(execution.scenario_id, id)
-      message.success('设置基线成功')
-    } catch (e: any) {
-      console.error('Failed to set baseline:', e)
-      message.error('设置基线失败: ' + e.message)
-    }
-  }
-
   const loadData = async () => {
-    if (!id) return
+    if (!id) {
+      return
+    }
+
     setLoading(true)
     try {
-      const res = await executionApi.get(id)
-      setExecution(res.data)
-      // 如果 execution 已有 llm_model_id，默认选中
-      if (res.data.llm_model_id) {
-        setSelectedLlmId(res.data.llm_model_id)
-      }
-      // 获取场景信息
-      if (res.data.scenario_id) {
+      const executionData = await loadExecution(id)
+
+      if (executionData.scenario_id) {
         try {
-          const scenarioRes = await scenarioApi.get(res.data.scenario_id)
-          setScenarioName(scenarioRes.data.name)
+          const scenarioRes = await scenarioApi.get(executionData.scenario_id)
           setScenario(scenarioRes.data)
-        } catch (e) {
-          // 获取失败，显示 id
-          setScenarioName(res.data.scenario_id)
+        } catch (error) {
+          console.error('Failed to load scenario:', error)
         }
-      } else {
-        setScenarioName('')
       }
-      if (res.data.status === 'completed' || res.data.status === 'failed' || res.data.status === 'completed_with_mismatch') {
-        loadTrace()
-        // 如果已经有比对结果，加载详情
-        startPolling()
+
+      if (
+        executionData.status === 'completed' ||
+        executionData.status === 'completed_with_mismatch' ||
+        executionData.status === 'failed'
+      ) {
+        await loadTrace(id)
+        startPolling(id)
       }
-    } catch (e: any) {
-      console.error(e)
+    } catch (error) {
+      console.error('Failed to load execution detail:', error)
     } finally {
       setLoading(false)
     }
   }
 
-  const loadTrace = async () => {
-    if (!id) return
-    setTraceLoading(true)
+  useEffect(() => {
+    void loadLlmModels()
+  }, [])
+
+  useEffect(() => {
+    void loadData()
+    return () => {
+      clearPolling()
+    }
+  }, [id])
+
+  const handleSetBaseline = async () => {
+    if (!id || !execution) {
+      return
+    }
     try {
-      const res = await executionApi.getTrace(id)
-      setTrace(res.data)
-    } catch (e: any) {
-      console.error(e)
-    } finally {
-      setTraceLoading(false)
+      await scenarioApiExtended.setBaseline(execution.scenario_id, id)
+      message.success('基线设置成功')
+      if (execution.scenario_id) {
+        const scenarioRes = await scenarioApi.get(execution.scenario_id)
+        setScenario(scenarioRes.data)
+      }
+    } catch (error: any) {
+      message.error(`基线设置失败: ${error.message}`)
     }
   }
 
-  useEffect(() => {
-    loadData()
-  }, [id])
+  const handleRecompare = async () => {
+    if (!id) {
+      return
+    }
+    if (!selectedLlmId) {
+      message.error('请先选择比对模型')
+      return
+    }
+
+    try {
+      setLlmModalVisible(false)
+      await executionApi.recompare(id, selectedLlmId)
+      message.success('已触发重新比对')
+      setComparisonDetail(null)
+      startPolling(id)
+    } catch (error: any) {
+      message.error(error.message)
+    }
+  }
 
   if (loading) {
     return <Spin size="large" style={{ display: 'block', margin: '50px auto' }} />
@@ -186,354 +685,618 @@ const ExecutionDetail: React.FC = () => {
     return <Result status="404" title="执行不存在" />
   }
 
-  const getDuration = () => {
-    if (!execution.started_at || !execution.completed_at) return '-'
-    return `${(new Date(execution.completed_at).getTime() - new Date(execution.started_at).getTime()) / 1000}s`
-  }
+  const duration =
+    execution.started_at && execution.completed_at
+      ? `${(new Date(execution.completed_at).getTime() - new Date(execution.started_at).getTime()) / 1000}s`
+      : '-'
+  const statusSurface = getStatusSurface(execution.status)
 
   return (
-    <div>
-      <Card
-        title="执行详情"
-        extra={
-          <Button type="primary" ghost icon={<LeftOutlined />} onClick={() => navigate('/executions')}>
+    <div
+      style={{
+        minHeight: '100%',
+        padding: '8px 0 32px',
+        background:
+          'radial-gradient(circle at top left, rgba(14,165,233,0.10), transparent 26%), radial-gradient(circle at top right, rgba(245,158,11,0.10), transparent 22%), linear-gradient(180deg, #f4f7fb 0%, #eef3f8 100%)',
+      }}
+    >
+      <div
+        style={{
+          marginBottom: 18,
+          padding: '24px 28px',
+          borderRadius: 28,
+          background: `linear-gradient(135deg, ${statusSurface.panel} 0%, #ffffff 65%)`,
+          border: `1px solid ${statusSurface.border}`,
+          boxShadow: `0 24px 64px ${statusSurface.glow}`,
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'flex-start',
+            gap: 16,
+            flexWrap: 'wrap',
+          }}
+        >
+          <div style={{ display: 'grid', gap: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <Tag color={STATUS_COLORS[execution.status] || 'default'} style={{ marginInlineEnd: 0, borderRadius: 999, paddingInline: 12 }}>
+                {STATUS_TEXT[execution.status] || execution.status}
+              </Tag>
+              {execution.comparison_passed === true ? (
+                <Tag color="green" style={{ marginInlineEnd: 0, borderRadius: 999, paddingInline: 12 }}>
+                  比对通过
+                </Tag>
+              ) : execution.comparison_passed === false ? (
+                <Tag color="red" style={{ marginInlineEnd: 0, borderRadius: 999, paddingInline: 12 }}>
+                  比对未通过
+                </Tag>
+              ) : null}
+            </div>
+            <div style={{ fontSize: 30, fontWeight: 800, color: '#0f172a', letterSpacing: '-0.02em' }}>执行详情</div>
+            <div style={{ color: '#475569', maxWidth: 860, lineHeight: 1.7 }}>
+              查看执行状态、比对结论，以及仅保留 OpenAI LLM spans 的 Trace 回放详情。
+            </div>
+          </div>
+          <Button
+            type="primary"
+            ghost
+            icon={<LeftOutlined />}
+            onClick={() => navigate('/executions')}
+            style={{ borderRadius: 999, height: 40, paddingInline: 18 }}
+          >
             返回列表
           </Button>
-        }
+        </div>
+
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+            gap: 14,
+            marginTop: 22,
+          }}
+        >
+          {[
+            { label: '场景', value: scenario?.name || execution.scenario_id },
+            { label: '比对模型', value: execution.llm_model_id ? llmNameMap[execution.llm_model_id] || execution.llm_model_id : '-' },
+            { label: '执行耗时', value: duration },
+            { label: 'Trace ID', value: execution.trace_id || '-' },
+          ].map(item => (
+            <div
+              key={item.label}
+              style={{
+                padding: '16px 18px',
+                borderRadius: 20,
+                background: 'rgba(255,255,255,0.74)',
+                border: '1px solid rgba(255,255,255,0.9)',
+                boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.7)',
+              }}
+            >
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#64748b', marginBottom: 8 }}>{item.label}</div>
+              <div style={{ color: '#0f172a', fontSize: 15, fontWeight: 700, wordBreak: 'break-word' }}>{item.value}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <Card
+        title="执行详情"
+        style={{
+          borderRadius: 24,
+          border: '1px solid rgba(226,232,240,0.95)',
+          boxShadow: '0 20px 45px rgba(15, 23, 42, 0.06)',
+          overflow: 'hidden',
+          background: 'linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(248,250,252,0.98) 100%)',
+        }}
+        styles={{
+          header: { background: 'transparent', borderBottom: '1px solid #eef2f7', paddingInline: 24 },
+          body: { padding: 24 },
+        }}
       >
         <Descriptions bordered column={2}>
-          <Descriptions.Item label="执行ID">{execution.id}</Descriptions.Item>
+          <Descriptions.Item label="执行 ID">{execution.id}</Descriptions.Item>
           <Descriptions.Item label="状态">
-            <Tag color={STATUS_COLORS[execution.status] || 'gray'}>
-              {STATUS_TEXT[execution.status] || execution.status}
-            </Tag>
+            <Tag color={STATUS_COLORS[execution.status] || 'default'}>{STATUS_TEXT[execution.status] || execution.status}</Tag>
           </Descriptions.Item>
-          <Descriptions.Item label="Agent ID">{execution.agent_id}</Descriptions.Item>
-          <Descriptions.Item label="测试场景">{scenarioName || execution.scenario_id}</Descriptions.Item>
+          <Descriptions.Item label="测试场景">{scenario?.name || execution.scenario_id}</Descriptions.Item>
+          <Descriptions.Item label="比对模型">
+            {execution.llm_model_id ? llmNameMap[execution.llm_model_id] || execution.llm_model_id : '-'}
+          </Descriptions.Item>
+          <Descriptions.Item label="本次 Session">{execution.user_session || '-'}</Descriptions.Item>
           <Descriptions.Item label="Trace ID">{execution.trace_id || '-'}</Descriptions.Item>
-          <Descriptions.Item label="比对分数">
-            {execution.comparison_score != null ? execution.comparison_score.toFixed(2) : '-'}
-          </Descriptions.Item>
           <Descriptions.Item label="比对结果">
             {execution.comparison_passed === true ? (
               <Tag color="green">通过</Tag>
             ) : execution.comparison_passed === false ? (
-              <Tag color="red">不通过</Tag>
+              <Tag color="red">未通过</Tag>
             ) : (
               '-'
             )}
           </Descriptions.Item>
-          <Descriptions.Item label="耗时">{getDuration()}</Descriptions.Item>
-          <Descriptions.Item label="创建时间">
-            {new Date(new Date(execution.created_at).getTime() + 8 * 60 * 60 * 1000).toLocaleString('zh-CN')}
+          <Descriptions.Item label="LLM 调用范围">
+            {scenario ? `${scenario.llm_count_min} ~ ${scenario.llm_count_max}` : '-'}
           </Descriptions.Item>
-          <Descriptions.Item label="完成时间">
-            {execution.completed_at ? new Date(new Date(execution.completed_at).getTime() + 8 * 60 * 60 * 1000).toLocaleString('zh-CN') : '-'}
-          </Descriptions.Item>
-          <Descriptions.Item label="过程阈值">
-            {scenario ? scenario.process_threshold : '-'}
-          </Descriptions.Item>
-          <Descriptions.Item label="结果阈值">
-            {scenario ? scenario.result_threshold : '-'}
-          </Descriptions.Item>
+          <Descriptions.Item label="执行耗时">{duration}</Descriptions.Item>
+          <Descriptions.Item label="创建时间">{formatLocalTime(getDisplayCreatedAt(execution))}</Descriptions.Item>
+          <Descriptions.Item label="完成时间">{formatLocalTime(execution.completed_at)}</Descriptions.Item>
         </Descriptions>
 
-        {execution.error_message && (
+        {execution.status === 'failed' && execution.error_message && (
           <Alert
+            type="error"
+            showIcon
+            style={{ marginTop: 16 }}
             message="执行错误"
             description={execution.error_message}
-            type="error"
-            style={{ marginTop: 16 }}
           />
         )}
       </Card>
 
-      {trace && trace.spans.length > 0 && (
-        <Card title="全链路回放" style={{ marginTop: 16 }}>
-          <Steps
-            direction="vertical"
-            current={trace.spans.length}
-            items={trace.spans.map((span) => ({
-              title: `${span.name} (${span.span_type})`,
-              description: (
-                <div>
-                  <div>耗时: {span.duration_ms}ms</div>
-                  {span.ttft_ms && <div>TTFT: {span.ttft_ms}ms</div>}
-                  {span.tpot_ms && <div>TPOT: {span.tpot_ms}ms</div>}
-                </div>
-              ),
-            }))}
-          />
-
-          <Collapse style={{ marginTop: 16 }}>
-            {trace.spans.map((span) => {
-              // 对于 LLM 类型 span，尝试提取 lastAssistant.content
-              const isLlmType = span.span_type === 'llm' || span.span_type === 'LLM';
-              let displayOutput = span.output;
-              if (isLlmType && span.output) {
-                try {
-                  const outputJson = JSON.parse(span.output);
-                  if (outputJson?.lastAssistant?.content) {
-                    const content = outputJson.lastAssistant.content;
-                    // 如果 content 是 OpenAI 格式数组 [{type: "text", text: "..."}]
-                    if (Array.isArray(content)) {
-                      displayOutput = content
-                        .filter(item => item.type === 'text' && item.text)
-                        .map(item => item.text)
-                        .join('\n');
-                    } else if (typeof content === 'string') {
-                      displayOutput = content;
-                    }
-                    // 如果是对象保持 JSON 字符串化
-                    else if (typeof content === 'object') {
-                      displayOutput = JSON.stringify(content, null, 2);
-                    }
-                  }
-                } catch (e) {
-                  // 解析失败，保持原样
-                }
-              }
-
-              return (
-              <Collapse.Panel
-                key={span.span_id}
-                header={
-                  <Space>
-                    <Tag>{span.span_type}</Tag>
-                    {span.name}
-                    {span.input && <span> - {span.input.slice(0, 50)}...</span>}
-                    {isLlmType && displayOutput !== span.output && <Tag color="blue">简化</Tag>}
-                  </Space>
-                }
-              >
-                {span.input && (
-                  <div>
-                    <div><strong>输入:</strong></div>
-                    <pre style={{ background: '#f5f5f5', padding: 8, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: '400px', overflowY: 'auto' }}>{span.input}</pre>
-                  </div>
-                )}
-                {displayOutput && (
-                  <div style={{ marginTop: 8 }}>
-                    <div><strong>输出:</strong></div>
-                    <pre style={{ background: '#f5f5f5', padding: 8, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: '400px', overflowY: 'auto' }}>{displayOutput}</pre>
-                  </div>
-                )}
-              </Collapse.Panel>
-              );
-            })}
-          </Collapse>
-        </Card>
-      )}
-
-      {traceLoading && (
-        <Card style={{ marginTop: 16 }}>
-          <Spin />
-        </Card>
-      )}
-
-      {/* 比对详情卡片 - 始终显示，确保重新比对按钮总是可用 */}
       <Card
         title="比对详情"
-        style={{ marginTop: 16 }}
+        style={{
+          marginTop: 18,
+          borderRadius: 24,
+          border: '1px solid rgba(226,232,240,0.95)',
+          boxShadow: '0 20px 45px rgba(15, 23, 42, 0.06)',
+          overflow: 'hidden',
+          background: 'linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(247,250,252,0.98) 100%)',
+        }}
+        styles={{
+          header: { background: 'transparent', borderBottom: '1px solid #eef2f7', paddingInline: 24 },
+          body: { padding: 24 },
+        }}
         extra={
           <Space>
-            {execution && (execution.status === 'completed' || execution.status === 'completed_with_mismatch' || execution.status === 'failed') && (
-              <Button
-                icon={<PushpinOutlined />}
-                onClick={handleSetBaseline}
-              >
-                设为基线
-              </Button>
-            )}
-            <Button
-              icon={<ReloadOutlined />}
-              onClick={handleRecompareClick}
-              loading={comparisonLoading}
-            >
+            <Button icon={<PushpinOutlined />} onClick={() => void handleSetBaseline()}>
+              设为基线
+            </Button>
+            <Button icon={<ReloadOutlined />} loading={comparisonLoading} onClick={() => setLlmModalVisible(true)}>
               重新比对
             </Button>
           </Space>
         }
       >
-          {pollTimeout && (
-            <Alert
-              message="轮询超时"
-              description="比对仍在进行中，请稍后手动刷新查看结果"
-              type="warning"
-              style={{ marginBottom: 16 }}
-            />
-          )}
-
-          {comparisonDetail?.status === 'failed' && (
-            <Alert
-              message="比对失败"
-              description={comparisonDetail.error_message || '未知错误'}
-              type="error"
-              style={{ marginBottom: 16 }}
-            />
-          )}
-
-          {comparisonLoading && (
-            <div style={{ textAlign: 'center', padding: '20px' }}>
-              <Spin />
-              <div style={{ marginTop: 8 }}>比对进行中...</div>
-            </div>
-          )}
-
-          {!comparisonLoading && (
-            <>
-              {!comparisonDetail && (
-                <Alert
-                  message="未进行比对"
-                  description="当前执行还没有进行过比对。点击右上方'重新比对'开始自动比对，完成后就可以查看比对结果。"
-                  type="info"
-                  showIcon
-                  style={{ marginBottom: 16 }}
-                />
-              )}
-              {comparisonDetail && (
-                <>
-                  {comparisonDetail.process_score == null && comparisonDetail.result_score == null && (
-                    <Alert
-                      message="未设置基线"
-                      description="当前场景没有设置过程基线和结果基线，所以无法进行比对。可以点击右上方'设为基线'将当前执行设置为基线。"
-                      type="info"
-                      showIcon
-                      style={{ marginBottom: 16 }}
-                    />
-                  )}
-                  <Space size="large" wrap>
-                    {comparisonDetail.process_score != null && (
-                      <Statistic
-                        title="过程分数"
-                        value={comparisonDetail.process_score}
-                        suffix="/ 100"
-                        valueStyle={{
-                          color: comparisonDetail.process_score >= 60 ? '#3f8600' : '#cf1322',
-                        }}
-                      />
-                    )}
-                    {comparisonDetail.result_score != null && (
-                      <Statistic
-                        title="结果分数"
-                        value={comparisonDetail.result_score}
-                        suffix="/ 100"
-                        valueStyle={{
-                          color: comparisonDetail.result_score >= 60 ? '#3f8600' : '#cf1322',
-                        }}
-                      />
-                    )}
-                    <Statistic
-                      title="总体结果"
-                      value={comparisonDetail.overall_passed ? '通过' : '不通过'}
-                      valueStyle={{
-                        color: comparisonDetail.overall_passed ? '#3f8600' : '#cf1322',
-                      }}
-                      prefix={comparisonDetail.overall_passed ? <CheckCircleOutlined /> : <CloseCircleOutlined />}
-                    />
-                  </Space>
-
-                  <Divider />
-
-                  <Collapse defaultActiveKey={['tools']}>
-                    <Collapse.Panel
-                      header={`工具调用比对 (${comparisonDetail.tool_comparisons.filter(t => t.matched).length}/${comparisonDetail.tool_comparisons.length})`}
-                      key="tools"
-                    >
-                      {comparisonDetail.tool_comparisons.map((tool, idx) => (
-                        <div key={idx} style={{ marginBottom: 16, border: '1px solid #f0f0f0', padding: 12, borderRadius: 4 }}>
-                          <Space>
-                            <Tag color={tool.matched ? 'blue' : 'red'}>{tool.tool_name}</Tag>
-                            <Tag color={tool.score >= 0.5 ? 'green' : 'red'}>
-                              {(tool.score * 100).toFixed(1)}
-                            </Tag>
-                            {!tool.matched && <Tag color="orange">未匹配</Tag>}
-                          </Space>
-                          <div style={{ marginTop: 8 }}>
-                            <small style={{ color: '#888' }}>{tool.reason}</small>
-                          </div>
-                          {tool.baseline_input && (
-                            <div style={{ marginTop: 8 }}>
-                              <div><strong>基线输入:</strong></div>
-                              <pre style={{ background: '#f5f5f5', padding: 8, fontSize: 12, maxHeight: 200, overflow: 'auto' }}>{tool.baseline_input}</pre>
-                            </div>
-                          )}
-                          {tool.actual_input && (
-                            <div style={{ marginTop: 8 }}>
-                              <div><strong>实际输入:</strong></div>
-                              <pre style={{ background: '#f5f5f5', padding: 8, fontSize: 12, maxHeight: 200, overflow: 'auto' }}>{tool.actual_input}</pre>
-                            </div>
-                          )}
-                          {tool.baseline_output && (
-                            <div style={{ marginTop: 8 }}>
-                              <div><strong>基线输出:</strong></div>
-                              <pre style={{ background: '#f5f5f5', padding: 8, fontSize: 12, maxHeight: 200, overflow: 'auto' }}>{tool.baseline_output}</pre>
-                            </div>
-                          )}
-                          {tool.actual_output && (
-                            <div style={{ marginTop: 8 }}>
-                              <div><strong>实际输出:</strong></div>
-                              <pre style={{ background: '#f5f5f5', padding: 8, fontSize: 12, maxHeight: 200, overflow: 'auto' }}>{tool.actual_output}</pre>
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </Collapse.Panel>
-
-                    {comparisonDetail.llm_comparison && (
-                      <Collapse.Panel header="LLM 结果比对" key="llm">
-                        <div style={{ marginBottom: 16 }}>
-                          <Space>
-                            <Tag color={comparisonDetail.llm_comparison.score >= 0.5 ? 'green' : 'red'}>
-                              LLM 分数: {(comparisonDetail.llm_comparison.score * 100).toFixed(1)}
-                            </Tag>
-                            <Tag color="blue">
-                              算法相似度: {(comparisonDetail.llm_comparison.similarity * 100).toFixed(1)}
-                            </Tag>
-                          </Space>
-                          <div style={{ marginTop: 8 }}>
-                            <small style={{ color: '#888' }}>{comparisonDetail.llm_comparison.reason}</small>
-                          </div>
-                          <div style={{ marginTop: 8 }}>
-                            <div><strong>基线输出:</strong></div>
-                            <pre style={{ background: '#f5f5f5', padding: 8, fontSize: 12, maxHeight: 300, overflow: 'auto' }}>{comparisonDetail.llm_comparison.baseline_output}</pre>
-                          </div>
-                          <div style={{ marginTop: 8 }}>
-                            <div><strong>实际输出:</strong></div>
-                            <pre style={{ background: '#f5f5f5', padding: 8, fontSize: 12, maxHeight: 300, overflow: 'auto' }}>{comparisonDetail.llm_comparison.actual_output}</pre>
-                          </div>
-                        </div>
-                      </Collapse.Panel>
-                    )}
-                  </Collapse>
-                </>
-              )}
-            </>
-          )}
-        </Card>
-
-        <Modal
-          title="选择 LLM 模型（用于比对验证）"
-          open={llmModalVisible}
-          onCancel={() => setLlmModalVisible(false)}
-          onOk={confirmRecompare}
-          confirmLoading={comparisonLoading}
-          okText="开始比对"
-          cancelText="取消"
-        >
-          <div style={{ marginBottom: 16 }}>
-            <p>选择一个 LLM 模型用于语义验证。如果留空则不进行 LLM 验证，仅使用算法相似度打分。</p>
-          </div>
-          <Select
-            placeholder="选择 LLM 模型"
-            allowClear
-            style={{ width: '100%' }}
-            loading={llmLoading}
-            options={llmModels.map(m => ({ label: m.name, value: m.id }))}
-            value={selectedLlmId || execution?.llm_model_id || undefined}
-            onChange={setSelectedLlmId}
+        {pollTimeout && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message="轮询超时"
+            description="比对可能仍在进行中，请稍后刷新页面。"
           />
-        </Modal>
+        )}
+
+        {comparisonLoading && (
+          <div style={{ textAlign: 'center', padding: 24 }}>
+            <Spin />
+            <div style={{ marginTop: 12 }}>比对进行中...</div>
+          </div>
+        )}
+
+        {!comparisonLoading && !comparisonDetail && (
+          <Alert
+            type="info"
+            showIcon
+            message="暂无比对结果"
+            description="当前执行还没有可展示的比对结果。"
+          />
+        )}
+
+        {!comparisonLoading && comparisonDetail && (
+          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            {comparisonDetail.status === 'failed' && (
+              <Alert
+                type="error"
+                showIcon
+                message="比对失败"
+                description={comparisonDetail.error_message || '未知错误'}
+              />
+            )}
+
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                gap: 14,
+              }}
+            >
+              <div
+                style={{
+                  padding: '18px 20px',
+                  borderRadius: 20,
+                  background:
+                    comparisonDetail.overall_passed === true
+                      ? 'linear-gradient(135deg, #ecfdf5 0%, #ffffff 100%)'
+                      : comparisonDetail.overall_passed === false
+                        ? 'linear-gradient(135deg, #fef2f2 0%, #ffffff 100%)'
+                        : 'linear-gradient(135deg, #f8fafc 0%, #ffffff 100%)',
+                  border:
+                    comparisonDetail.overall_passed === true
+                      ? '1px solid #86efac'
+                      : comparisonDetail.overall_passed === false
+                        ? '1px solid #fca5a5'
+                        : '1px solid #e2e8f0',
+                }}
+              >
+                <Statistic
+                  title="总体结果"
+                  value={
+                    comparisonDetail.overall_passed === true
+                      ? '通过'
+                      : comparisonDetail.overall_passed === false
+                        ? '未通过'
+                        : '未判定'
+                  }
+                  valueStyle={{
+                    color:
+                      comparisonDetail.overall_passed === true
+                        ? '#15803d'
+                        : comparisonDetail.overall_passed === false
+                          ? '#b91c1c'
+                          : '#475569',
+                    fontWeight: 800,
+                  }}
+                />
+              </div>
+              {comparisonDetail.llm_count_check && (
+                <div
+                  style={{
+                    padding: '18px 20px',
+                    borderRadius: 20,
+                    background: 'linear-gradient(135deg, #eff6ff 0%, #ffffff 100%)',
+                    border: '1px solid #bfdbfe',
+                  }}
+                >
+                  <Statistic
+                    title="实际 LLM 调用次数"
+                    value={comparisonDetail.llm_count_check.actual_count}
+                    suffix={`/ ${comparisonDetail.llm_count_check.expected_min}-${comparisonDetail.llm_count_check.expected_max}`}
+                    valueStyle={{ color: '#1d4ed8', fontWeight: 800 }}
+                  />
+                </div>
+              )}
+            </div>
+
+            <Alert
+              showIcon
+              type={getOverallResultAlertType(comparisonDetail)}
+              message="结果说明"
+              description={getOverallResultSummary(comparisonDetail)}
+            />
+
+            {comparisonDetail.llm_count_check ? (
+              <Descriptions bordered size="small" column={2} title="LLM 调用次数检查">
+                <Descriptions.Item label="期望范围">
+                  {comparisonDetail.llm_count_check.expected_min} ~ {comparisonDetail.llm_count_check.expected_max}
+                </Descriptions.Item>
+                <Descriptions.Item label="实际次数">
+                  {comparisonDetail.llm_count_check.actual_count}
+                </Descriptions.Item>
+                <Descriptions.Item label="检查结果" span={2}>
+                  <Tag color={comparisonDetail.llm_count_check.passed ? 'green' : 'red'}>
+                    {comparisonDetail.llm_count_check.passed ? '通过' : '未通过'}
+                  </Tag>
+                </Descriptions.Item>
+              </Descriptions>
+            ) : (
+              <Alert type="info" showIcon message="暂无 LLM 调用次数检查结果" />
+            )}
+
+            {comparisonDetail.final_output_comparison ? (
+              <Descriptions bordered size="small" column={1} title="最终输出比对">
+                <Descriptions.Item label="比对结果">
+                  <Tag color={comparisonDetail.final_output_comparison.consistent ? 'green' : 'red'}>
+                    {comparisonDetail.final_output_comparison.consistent ? '一致' : '不一致'}
+                  </Tag>
+                </Descriptions.Item>
+                <Descriptions.Item label="判断原因">
+                  {comparisonDetail.final_output_comparison.reason || '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="算法粗筛相似度">
+                  {comparisonDetail.final_output_comparison.algorithm_similarity != null
+                    ? comparisonDetail.final_output_comparison.algorithm_similarity.toFixed(3)
+                    : '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="判定方式">
+                  {formatVerificationMode(comparisonDetail.final_output_comparison.verification_mode)}
+                </Descriptions.Item>
+                <Descriptions.Item label="基线输出">
+                  <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                    {extractDisplayOutput(comparisonDetail.final_output_comparison.baseline_output) || '-'}
+                  </pre>
+                </Descriptions.Item>
+                <Descriptions.Item label="实际输出">
+                  <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                    {extractDisplayOutput(comparisonDetail.final_output_comparison.actual_output) || '-'}
+                  </pre>
+                </Descriptions.Item>
+              </Descriptions>
+            ) : (
+              <Alert type="info" showIcon message="暂无最终输出比对结果" />
+            )}
+          </Space>
+        )}
+      </Card>
+
+      <Card
+        title={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span>Trace 回放</span>
+            <Tag color="blue" style={{ marginInlineEnd: 0, borderRadius: 999, paddingInline: 10 }}>
+              {visibleTraceSpans.length} spans
+            </Tag>
+          </div>
+        }
+        style={{
+          marginTop: 18,
+          borderRadius: 24,
+          border: '1px solid rgba(226,232,240,0.95)',
+          boxShadow: '0 20px 45px rgba(15, 23, 42, 0.06)',
+          overflow: 'hidden',
+          background: 'linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(244,247,251,0.98) 100%)',
+        }}
+        styles={{
+          header: { background: 'transparent', borderBottom: '1px solid #eef2f7', paddingInline: 24 },
+          body: { background: 'linear-gradient(180deg, #f8fbff 0%, #f5f7fb 100%)', padding: 24 },
+        }}
+      >
+        {traceLoading && <Spin />}
+
+        {!traceLoading && visibleTraceSpans.length > 0 && (
+          <Collapse
+            ghost
+            style={{
+              background: 'transparent',
+            }}
+          >
+            {visibleTraceSpans.map(span => (
+              <Collapse.Panel
+                key={span.span_id}
+                header={
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 12,
+                      padding: '12px 14px',
+                      borderRadius: 14,
+                      background: getSpanTheme(span.span_type).headerBg,
+                      border: `1px solid ${getSpanTheme(span.span_type).borderColor}`,
+                      boxShadow: '0 6px 18px rgba(15, 23, 42, 0.04)',
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: 10,
+                        height: 10,
+                        borderRadius: 999,
+                        background:
+                          span.span_type === 'llm'
+                            ? '#1677ff'
+                            : span.span_type === 'tool'
+                              ? '#fa541c'
+                              : '#8c8c8c',
+                        flex: '0 0 auto',
+                      }}
+                    />
+                    <Tag color={getSpanTheme(span.span_type).tagColor} style={{ marginInlineEnd: 0 }}>
+                      {span.span_type.toUpperCase()}
+                    </Tag>
+                    <div style={{ display: 'grid', gap: 2, minWidth: 0, flex: 1 }}>
+                      <div
+                        style={{
+                          fontWeight: 700,
+                          color: '#1f1f1f',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {span.name}
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', color: '#666', fontSize: 12 }}>
+                        <span>耗时 {formatSpanDuration(span.duration_ms)}</span>
+                        {span.span_type === 'llm' && (
+                          <span>Tokens: {formatTokenUsage(span.input_tokens, span.output_tokens)}</span>
+                        )}
+                        {span.ttft_ms != null && <span>TTFT {Math.round(span.ttft_ms)}ms</span>}
+                        {span.tpot_ms != null && <span>TPOT {span.tpot_ms.toFixed(1)}ms</span>}
+                      </div>
+                    </div>
+                  </div>
+                }
+              >
+                <div
+                  style={{
+                    background: '#fff',
+                    border: `1px solid ${getSpanTheme(span.span_type).borderColor}`,
+                    borderRadius: 16,
+                    padding: 16,
+                    boxShadow: '0 8px 24px rgba(15, 23, 42, 0.04)',
+                  }}
+                >
+                  {span.span_type === 'llm' ? (
+                    <Tabs
+                      defaultActiveKey="messages"
+                      items={[
+                        {
+                          key: 'messages',
+                          label: 'Messages',
+                          children: (
+                            <div style={{ display: 'grid', gap: 12 }}>
+                              {extractLLMMessages(span).length > 0 ? (
+                                <Collapse
+                                  ghost
+                                  items={extractLLMMessages(span).map((messageItem, index) => ({
+                                    key: `${span.span_id}-message-${index}`,
+                                    label: (
+                                      <span
+                                        style={{
+                                          fontWeight: 700,
+                                          color: roleColorMap[messageItem.role] || '#595959',
+                                        }}
+                                      >
+                                        {roleLabelMap[messageItem.role] || messageItem.role}
+                                      </span>
+                                    ),
+                                    children: (
+                                      <div style={{ display: 'grid', gap: 10 }}>
+                                        {messageItem.content && (
+                                          <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                                            {messageItem.content}
+                                          </pre>
+                                        )}
+                                        {messageItem.toolCalls?.map((toolCall, toolIndex) => (
+                                          <div
+                                            key={`${span.span_id}-message-${index}-tool-${toolIndex}`}
+                                            style={{
+                                              border: '1px solid #dbeafe',
+                                              borderRadius: 10,
+                                              overflow: 'hidden',
+                                              background: '#f8fbff',
+                                            }}
+                                          >
+                                            <div
+                                              style={{
+                                                padding: '8px 12px',
+                                                background: '#eff6ff',
+                                                borderBottom: '1px solid #dbeafe',
+                                                color: '#1d4ed8',
+                                                fontWeight: 700,
+                                                fontSize: 13,
+                                              }}
+                                            >
+                                              {toolCall.name}
+                                            </div>
+                                            {toolCall.content && (
+                                              <pre
+                                                style={{
+                                                  margin: 0,
+                                                  padding: '10px 12px',
+                                                  whiteSpace: 'pre-wrap',
+                                                  wordBreak: 'break-word',
+                                                  color: '#0f172a',
+                                                  background: '#ffffff',
+                                                }}
+                                              >
+                                                {toolCall.content}
+                                              </pre>
+                                            )}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    ),
+                                    style: {
+                                      border: '1px solid #edf2f7',
+                                      borderLeft: `4px solid ${roleColorMap[messageItem.role] || '#d9d9d9'}`,
+                                      borderRadius: 12,
+                                      background: rolePanelBgMap[messageItem.role] || '#fff',
+                                      marginBottom: 10,
+                                    },
+                                  }))}
+                                />
+                              ) : (
+                                <Alert type="info" showIcon message="暂无可提取的 LLM messages" />
+                              )}
+                            </div>
+                          ),
+                        },
+                        {
+                          key: 'details',
+                          label: 'Details',
+                          children: (
+                            <Descriptions
+                              bordered
+                              size="small"
+                              column={1}
+                              styles={{
+                                label: { width: 88, fontWeight: 600 },
+                                content: { background: '#fcfcfd' },
+                              }}
+                            >
+                              <Descriptions.Item label="Tokens">
+                                {formatTokenUsage(span.input_tokens, span.output_tokens)}
+                              </Descriptions.Item>
+                              <Descriptions.Item label="输入">
+                                <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                                  {stringifyPretty(span.input)}
+                                </pre>
+                              </Descriptions.Item>
+                              <Descriptions.Item label="输出">
+                                <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                                  {stringifyPretty(span.output)}
+                                </pre>
+                              </Descriptions.Item>
+                            </Descriptions>
+                          ),
+                        },
+                      ]}
+                    />
+                  ) : (
+                    <div style={{ display: 'grid', gap: 14 }}>
+                      {span.input && (
+                        <div
+                          style={{
+                            border: '1px solid #f0f0f0',
+                            borderRadius: 12,
+                            padding: 14,
+                            background: '#fffaf7',
+                          }}
+                        >
+                          <div style={{ fontWeight: 700, marginBottom: 8, color: '#8c2f00' }}>输入</div>
+                          <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                            {stringifyPretty(span.input)}
+                          </pre>
+                        </div>
+                      )}
+                      {span.output && (
+                        <div
+                          style={{
+                            border: '1px solid #f0f0f0',
+                            borderRadius: 12,
+                            padding: 14,
+                            background: '#fff',
+                          }}
+                        >
+                          <div style={{ fontWeight: 700, marginBottom: 8, color: '#8c2f00' }}>输出</div>
+                          <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                            {stringifyPretty(span.output)}
+                          </pre>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </Collapse.Panel>
+            ))}
+          </Collapse>
+        )}
+
+        {!traceLoading && visibleTraceSpans.length === 0 && (
+          <Alert type="info" showIcon message="暂无 Trace 数据" />
+        )}
+      </Card>
+
+      <Modal
+        title="选择比对模型"
+        open={llmModalVisible}
+        onCancel={() => setLlmModalVisible(false)}
+        onOk={() => void handleRecompare()}
+        okText="开始比对"
+        cancelText="取消"
+      >
+        <p style={{ marginBottom: 12 }}>重新比对必须选择一个 LLM 模型。</p>
+        <Select
+          style={{ width: '100%' }}
+          placeholder="选择比对模型"
+          value={selectedLlmId}
+          onChange={value => setSelectedLlmId(value)}
+          options={llmModels.map(model => ({ label: model.name, value: model.id }))}
+        />
+      </Modal>
     </div>
   )
 }

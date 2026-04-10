@@ -1,9 +1,9 @@
 """场景模型"""
 
-from uuid import UUID
 from datetime import datetime
-from typing import Optional
-from pydantic import BaseModel, Field
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ScenarioCreate(BaseModel):
@@ -11,35 +11,41 @@ class ScenarioCreate(BaseModel):
 
     agent_id: UUID
     name: str = Field(..., max_length=255)
-    description: Optional[str] = None
+    description: str | None = None
     prompt: str = Field(...)
-    baseline_tool_calls: Optional[str] = None
-    baseline_result: Optional[str] = None
-    compare_result: bool = True
-    compare_process: bool = False
-    process_threshold: float = 60.0
-    result_threshold: float = 60.0
-    tool_count_tolerance: int = 0
+    baseline_result: str | None = None
+    llm_count_min: int = Field(default=0, ge=0)
+    llm_count_max: int = Field(default=999, ge=0)
     compare_enabled: bool = True
-    enable_llm_verification: bool = True
+
+    @model_validator(mode="after")
+    def validate_llm_count_range(self) -> "ScenarioCreate":
+        if self.llm_count_min > self.llm_count_max:
+            raise ValueError("llm_count_min must be less than or equal to llm_count_max")
+        return self
 
 
 class ScenarioUpdate(BaseModel):
     """更新场景请求"""
 
-    agent_id: Optional[UUID] = None
-    name: Optional[str] = Field(None, max_length=255)
-    description: Optional[str] = None
-    prompt: Optional[str] = None
-    baseline_tool_calls: Optional[str] = None
-    baseline_result: Optional[str] = None
-    compare_result: Optional[bool] = None
-    compare_process: Optional[bool] = None
-    process_threshold: Optional[float] = None
-    result_threshold: Optional[float] = None
-    tool_count_tolerance: Optional[int] = None
-    compare_enabled: Optional[bool] = None
-    enable_llm_verification: Optional[bool] = None
+    agent_id: UUID | None = None
+    name: str | None = Field(None, max_length=255)
+    description: str | None = None
+    prompt: str | None = None
+    baseline_result: str | None = None
+    llm_count_min: int | None = Field(default=None, ge=0)
+    llm_count_max: int | None = Field(default=None, ge=0)
+    compare_enabled: bool | None = None
+
+    @model_validator(mode="after")
+    def validate_llm_count_range(self) -> "ScenarioUpdate":
+        if (
+            self.llm_count_min is not None
+            and self.llm_count_max is not None
+            and self.llm_count_min > self.llm_count_max
+        ):
+            raise ValueError("llm_count_min must be less than or equal to llm_count_max")
+        return self
 
 
 class ScenarioResponse(BaseModel):
@@ -47,21 +53,15 @@ class ScenarioResponse(BaseModel):
 
     id: UUID
     agent_id: UUID
-    agent_name: Optional[str] = None
+    agent_name: str | None = None
     name: str
-    description: Optional[str]
+    description: str | None
     prompt: str
-    baseline_tool_calls: Optional[str]
-    baseline_result: Optional[str]
-    compare_result: bool
-    compare_process: bool
-    process_threshold: float
-    result_threshold: float
-    tool_count_tolerance: int
+    baseline_result: str | None
+    llm_count_min: int
+    llm_count_max: int
     compare_enabled: bool
-    enable_llm_verification: bool
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

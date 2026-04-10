@@ -1,17 +1,49 @@
-import React, { useState, useEffect } from 'react'
-import { Table, Button, Space, Input, Modal, Form, message, Popconfirm } from 'antd'
-import { PlusOutlined, EditOutlined, DeleteOutlined, ExperimentOutlined } from '@ant-design/icons'
+import { useEffect, useState } from 'react'
+import {
+  Button,
+  Form,
+  Input,
+  InputNumber,
+  Modal,
+  Popconfirm,
+  Space,
+  Table,
+  message,
+} from 'antd'
+import { DeleteOutlined, EditOutlined, ExperimentOutlined, PlusOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
-import type { LLMModel } from '../api/types'
-import { llmApi } from '../api/client'
 
-const LLMList: React.FC = () => {
+import { llmApi } from '../api/client'
+import type { LLMModel } from '../api/types'
+
+const { TextArea } = Input
+
+const DEFAULT_COMPARISON_PROMPT = `请判断下面【基线输出】和【实际输出】的核心语义是否一致：
+
+基线输出:
+{{baseline_result}}
+
+实际输出:
+{{actual_result}}
+
+要求：
+1. 核心语义一致（回答结论相同、解决同一个问题、满足相同需求）时返回 consistent = true
+2. 核心语义不一致时返回 consistent = false
+3. 简要说明判断原因
+4. 只输出 JSON：{"consistent": boolean, "reason": string}`
+
+const formatLocalTime = (value: string) => {
+  const date = new Date(value)
+  return new Date(date.getTime() + 8 * 60 * 60 * 1000).toLocaleString('zh-CN')
+}
+
+const LLMList = () => {
   const [models, setModels] = useState<LLMModel[]>([])
-  const [keyword, setKeyword] = useState('')
+  const [keyword, setKeyword] = useState("")
   const [loading, setLoading] = useState(false)
   const [modalVisible, setModalVisible] = useState(false)
   const [isEdit, setIsEdit] = useState(false)
-  const [currentId, setCurrentId] = useState<string>('')
+  const [currentId, setCurrentId] = useState("")
   const [form] = Form.useForm()
 
   const loadData = async () => {
@@ -19,26 +51,30 @@ const LLMList: React.FC = () => {
     try {
       const res = await llmApi.list(keyword || undefined)
       setModels(res.data || [])
-    } catch (e: any) {
-      message.error(e.message)
+    } catch (error: any) {
+      message.error(error.message)
     } finally {
       setLoading(false)
     }
   }
 
   useEffect(() => {
-    loadData()
+    void loadData()
   }, [keyword])
 
-  const handleCreate = () => {
+  const openCreateModal = () => {
     setIsEdit(false)
-    setCurrentId('')
+    setCurrentId("")
     form.resetFields()
-    form.setFieldsValue({ temperature: 0.0, max_tokens: 1024 })
+    form.setFieldsValue({
+      temperature: 0,
+      max_tokens: 1024,
+      comparison_prompt: DEFAULT_COMPARISON_PROMPT,
+    })
     setModalVisible(true)
   }
 
-  const handleEdit = (record: LLMModel) => {
+  const openEditModal = (record: LLMModel) => {
     setIsEdit(true)
     setCurrentId(record.id)
     form.setFieldsValue({
@@ -48,6 +84,7 @@ const LLMList: React.FC = () => {
       base_url: record.base_url,
       temperature: record.temperature,
       max_tokens: record.max_tokens,
+      comparison_prompt: record.comparison_prompt || DEFAULT_COMPARISON_PROMPT,
     })
     setModalVisible(true)
   }
@@ -55,10 +92,10 @@ const LLMList: React.FC = () => {
   const handleDelete = async (id: string) => {
     try {
       await llmApi.delete(id)
-      message.success('删除成功')
-      loadData()
-    } catch (e: any) {
-      message.error(e.message)
+      message.success("删除成功")
+      await loadData()
+    } catch (error: any) {
+      message.error(error.message)
     }
   }
 
@@ -70,8 +107,8 @@ const LLMList: React.FC = () => {
       } else {
         message.error(res.data.message)
       }
-    } catch (e: any) {
-      message.error(e.message)
+    } catch (error: any) {
+      message.error(error.message)
     }
   }
 
@@ -80,78 +117,47 @@ const LLMList: React.FC = () => {
       const values = await form.validateFields()
       if (isEdit) {
         await llmApi.update(currentId, values)
-        message.success('更新成功')
+        message.success("更新成功")
       } else {
         await llmApi.create(values)
-        message.success('创建成功')
+        message.success("创建成功")
       }
       setModalVisible(false)
-      loadData()
-    } catch (e: any) {
-      message.error(e.message)
+      await loadData()
+    } catch (error: any) {
+      if (error?.errorFields) {
+        return
+      }
+      message.error(error.message)
     }
   }
 
   const columns: ColumnsType<LLMModel> = [
+    { title: "名称", dataIndex: "name", key: "name", width: 180 },
+    { title: "提供商", dataIndex: "provider", key: "provider", width: 120 },
+    { title: "模型 ID", dataIndex: "model_id", key: "model_id", width: 220 },
+    { title: "Temperature", dataIndex: "temperature", key: "temperature", width: 110 },
     {
-      title: '名称',
-      dataIndex: 'name',
-      key: 'name',
-      width: 150,
+      title: "创建时间",
+      dataIndex: "created_at",
+      key: "created_at",
+      width: 180,
+      render: formatLocalTime,
     },
     {
-      title: '提供商',
-      dataIndex: 'provider',
-      key: 'provider',
-      width: 100,
-    },
-    {
-      title: '模型ID',
-      dataIndex: 'model_id',
-      key: 'model_id',
-      width: 150,
-    },
-    {
-      title: '温度',
-      dataIndex: 'temperature',
-      key: 'temperature',
-      width: 80,
-    },
-    {
-      title: '创建时间',
-      dataIndex: 'created_at',
-      key: 'created_at',
-      width: 170,
-      render: (text: string) => {
-        // 后端存储的是 UTC 时间，转换为北京时间 (+8)
-        const d = new Date(text)
-        return new Date(d.getTime() + 8 * 60 * 60 * 1000).toLocaleString('zh-CN')
-      },
-    },
-    {
-      title: '操作',
-      key: 'action',
+      title: "操作",
+      key: "action",
       width: 220,
-      fixed: 'right',
+      fixed: "right",
       render: (_, record) => (
         <Space size="middle">
-          <Button
-            type="link"
-            size="small"
-            icon={<ExperimentOutlined />}
-            onClick={() => handleTest(record.id)}
-          >
+          <Button type="link" size="small" icon={<ExperimentOutlined />} onClick={() => void handleTest(record.id)}>
             测试
           </Button>
-          <Button
-            type="link"
-            size="small"
-            icon={<EditOutlined />}
-            onClick={() => handleEdit(record)}
-          >
+          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEditModal(record)}>
             编辑
           </Button>
-          <Popconfirm title="确认删除吗？" onConfirm={() => handleDelete(record.id)}>
+          <Popconfirm title="确认删除这个模型吗？" onConfirm={() => void handleDelete(record.id)}>
             <Button type="link" size="small" danger icon={<DeleteOutlined />}>
               删除
             </Button>
@@ -163,75 +169,73 @@ const LLMList: React.FC = () => {
 
   return (
     <div>
-      <div style={{ marginBottom: 16, display: 'flex', gap: 16 }}>
+      <div style={{ marginBottom: 16, display: "flex", gap: 16 }}>
         <Input.Search
           placeholder="搜索模型名称"
           allowClear
-          style={{ width: 300 }}
-          onSearch={setKeyword}
+          style={{ width: 320 }}
+          onSearch={value => setKeyword(value)}
+          onChange={event => {
+            if (!event.target.value) {
+              setKeyword("")
+            }
+          }}
         />
-        <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>
+        <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
           添加 LLM 模型
         </Button>
       </div>
-      <Table
-        columns={columns}
-        dataSource={models}
-        loading={loading}
-        rowKey="id"
-        pagination={{ pageSize: 10 }}
-      />
+
+      <Table columns={columns} dataSource={models} loading={loading} rowKey="id" pagination={{ pageSize: 10 }} />
+
       <Modal
-        title={isEdit ? '编辑 LLM 模型' : '添加 LLM 模型'}
+        title={isEdit ? "编辑 LLM 模型" : "添加 LLM 模型"}
         open={modalVisible}
-        onOk={handleSubmit}
+        onOk={() => void handleSubmit()}
         onCancel={() => setModalVisible(false)}
+        width={760}
       >
         <Form form={form} layout="vertical">
-          <Form.Item
-            name="name"
-            label="名称"
-            rules={[{ required: true, message: '请输入名称' }]}
-          >
-            <Input placeholder="例如: GPT-4" />
+          <Form.Item name="name" label="名称" rules={[{ required: true, message: "请输入名称" }]}>
+            <Input placeholder="例如：GPT-4o Compare" />
           </Form.Item>
-          <Form.Item
-            name="provider"
-            label="提供商"
-            rules={[{ required: true, message: '请输入提供商' }]}
-          >
-            <Input placeholder="例如: openai" />
+
+          <Form.Item name="provider" label="提供商" rules={[{ required: true, message: "请输入提供商" }]}>
+            <Input placeholder="例如：openai" />
           </Form.Item>
-          <Form.Item
-            name="model_id"
-            label="模型 ID"
-            rules={[{ required: true, message: '请输入模型 ID' }]}
-          >
-            <Input placeholder="例如: gpt-4" />
+
+          <Form.Item name="model_id" label="模型 ID" rules={[{ required: true, message: "请输入模型 ID" }]}>
+            <Input placeholder="例如：gpt-4o" />
           </Form.Item>
+
           <Form.Item name="base_url" label="API 地址">
-            <Input placeholder="例如: https://api.openai.com/v1" />
+            <Input placeholder="例如：https://api.openai.com/v1" />
           </Form.Item>
+
           <Form.Item
             name="api_key"
             label="API Key"
-            rules={[{ required: !isEdit, message: '请输入 API Key' }]}
+            rules={[{ required: !isEdit, message: "请输入 API Key" }]}
           >
-            <Input.Password placeholder="输入 API Key" />
+            <Input.Password placeholder={isEdit ? "留空表示不修改" : "输入 API Key"} />
           </Form.Item>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+            <Form.Item name="temperature" label="Temperature" initialValue={0}>
+              <InputNumber min={0} max={2} step={0.1} style={{ width: "100%" }} />
+            </Form.Item>
+
+            <Form.Item name="max_tokens" label="Max Tokens" initialValue={1024}>
+              <InputNumber min={1} step={1} style={{ width: "100%" }} />
+            </Form.Item>
+          </div>
+
           <Form.Item
-            name="temperature"
-            label="Temperature"
-            initialValue={0.0}
+            name="comparison_prompt"
+            label="比对 Prompt"
+            rules={[{ required: true, message: "请输入比对 Prompt" }]}
           >
-            <Input type="number" step={0.1} min={0} max={2} />
-          </Form.Item>
-          <Form.Item
-            name="max_tokens"
-            label="Max Tokens"
-            initialValue={1024}
-          >
-            <Input type="number" />
+            <TextArea rows={10} placeholder="用于最终输出一致性判断的 Prompt 模板" />
           </Form.Item>
         </Form>
       </Modal>
