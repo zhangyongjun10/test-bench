@@ -1,7 +1,7 @@
 """执行任务实体"""
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from sqlalchemy import Column, String, Text, ForeignKey, Double, Boolean, DateTime
 from sqlalchemy.dialects.postgresql import UUID
 from app.core.db import Base
@@ -16,6 +16,7 @@ class ExecutionJob(Base):
     agent_id = Column(UUID(as_uuid=True), ForeignKey("agents.id"), nullable=False)
     scenario_id = Column(UUID(as_uuid=True), ForeignKey("scenarios.id"), nullable=False)
     llm_model_id = Column(UUID(as_uuid=True), ForeignKey("llm_models.id"))
+    user_session = Column(String(255), nullable=False)
     trace_id = Column(String(255))
     status = Column(String(50), nullable=False)
     original_request = Column(Text)
@@ -25,8 +26,8 @@ class ExecutionJob(Base):
     comparison_passed = Column(Boolean)
     started_at = Column(DateTime(timezone=True))
     completed_at = Column(DateTime(timezone=True))
-    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC))
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
 
 
 # 状态枚举

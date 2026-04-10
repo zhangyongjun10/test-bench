@@ -19,7 +19,6 @@ export interface AgentCreate {
   description?: string
   base_url: string
   api_key: string
-  user_session?: string
 }
 
 export interface AgentUpdate extends Partial<AgentCreate> {}
@@ -32,6 +31,7 @@ export interface LLMModel {
   base_url?: string
   temperature: number
   max_tokens: number
+  comparison_prompt?: string
   created_at: string
   updated_at: string
 }
@@ -44,6 +44,7 @@ export interface LLMCreate {
   api_key: string
   temperature?: number
   max_tokens?: number
+  comparison_prompt?: string
 }
 
 export interface LLMUpdate extends Partial<LLMCreate> {}
@@ -55,15 +56,10 @@ export interface Scenario {
   name: string
   description?: string
   prompt: string
-  baseline_tool_calls?: string  // JSON string
   baseline_result?: string
-  compare_result: boolean
-  compare_process: boolean
-  process_threshold: number  // 0-100
-  result_threshold: number   // 0-100
-  tool_count_tolerance: number
+  llm_count_min: number
+  llm_count_max: number
   compare_enabled: boolean
-  enable_llm_verification: boolean
   created_at: string
   updated_at: string
 }
@@ -73,15 +69,10 @@ export interface ScenarioCreate {
   name: string
   description?: string
   prompt: string
-  baseline_tool_calls?: string
   baseline_result?: string
-  compare_result: boolean
-  compare_process: boolean
-  process_threshold?: number
-  result_threshold?: number
-  tool_count_tolerance?: number
+  llm_count_min?: number
+  llm_count_max?: number
   compare_enabled?: boolean
-  enable_llm_verification?: boolean
 }
 
 export interface ScenarioUpdate extends Partial<ScenarioCreate> {}
@@ -91,6 +82,7 @@ export interface ExecutionJob {
   agent_id: string
   scenario_id: string
   llm_model_id?: string
+  user_session?: string
   trace_id?: string
   status: string
   comparison_score?: number
@@ -107,13 +99,16 @@ export interface ExecutionJob {
 export interface CreateExecutionRequest {
   agent_id: string
   scenario_id: string
-  llm_model_id?: string
+  llm_model_id: string
 }
 
 export interface Span {
   span_id: string
   span_type: string
   name: string
+  provider?: string | null
+  input_tokens?: number
+  output_tokens?: number
   input?: string
   output?: string
   duration_ms: number
@@ -124,6 +119,11 @@ export interface Span {
 export interface ExecutionTrace {
   trace_id: string
   spans: Span[]
+}
+
+export interface ExecutionListData {
+  total: number
+  items: ExecutionJob[]
 }
 
 export interface ClickHouseConfig {
@@ -169,6 +169,22 @@ export interface SingleLLMComparison {
   reason: string
 }
 
+export interface LLMCountCheck {
+  expected_min: number
+  expected_max: number
+  actual_count: number
+  passed: boolean
+}
+
+export interface FinalOutputComparison {
+  baseline_output: string
+  actual_output: string
+  consistent: boolean
+  reason: string
+  algorithm_similarity?: number | null
+  verification_mode?: string | null
+}
+
 export interface DetailedComparisonResult {
   id: string
   execution_id: string
@@ -176,15 +192,22 @@ export interface DetailedComparisonResult {
   trace_id: string
   process_score: number | null  // 0-100
   result_score: number | null  // 0-100
-  overall_passed: boolean
+  overall_passed: boolean | null
   tool_comparisons: SingleToolComparison[]
   llm_comparison: SingleLLMComparison | null
+  llm_count_check: LLMCountCheck | null
+  final_output_comparison: FinalOutputComparison | null
   status: string  // pending/processing/completed/failed
   error_message: string | null
   retry_count: number
   created_at: string
   updated_at: string
   completed_at: string | null
+}
+
+export interface RecompareResponse {
+  success: boolean
+  message: string
 }
 
 export interface SetBaselineRequest {

@@ -24,8 +24,9 @@ class ScenarioService:
             description=request.description,
             prompt=request.prompt,
             baseline_result=request.baseline_result,
-            compare_result=request.compare_result,
-            compare_process=request.compare_process
+            llm_count_min=request.llm_count_min,
+            llm_count_max=request.llm_count_max,
+            compare_enabled=request.compare_enabled,
         )
         result = await self.repo.create(scenario)
         logger.info(f"Created scenario: {result.id} name={result.name} agent_id={request.agent_id}")
@@ -36,7 +37,12 @@ class ScenarioService:
         scenario = await self.repo.get_by_id(scenario_id)
         if not scenario:
             return None
-        logger.info(f"Update scenario {scenario_id}: process_threshold={request.process_threshold}, result_threshold={request.result_threshold}")
+        logger.info(
+            "Update scenario %s: llm_count_min=%s, llm_count_max=%s",
+            scenario_id,
+            request.llm_count_min,
+            request.llm_count_max,
+        )
 
         if request.agent_id is not None:
             scenario.agent_id = request.agent_id
@@ -48,22 +54,18 @@ class ScenarioService:
             scenario.prompt = request.prompt
         if request.baseline_result is not None:
             scenario.baseline_result = request.baseline_result
-        if request.baseline_tool_calls is not None:
-            scenario.baseline_tool_calls = request.baseline_tool_calls
-        if request.process_threshold is not None:
-            scenario.process_threshold = request.process_threshold
-        if request.result_threshold is not None:
-            scenario.result_threshold = request.result_threshold
-        if request.tool_count_tolerance is not None:
-            scenario.tool_count_tolerance = request.tool_count_tolerance
+
+        new_llm_count_min = request.llm_count_min if request.llm_count_min is not None else scenario.llm_count_min
+        new_llm_count_max = request.llm_count_max if request.llm_count_max is not None else scenario.llm_count_max
+        if new_llm_count_min > new_llm_count_max:
+            raise ValueError("llm_count_min must be less than or equal to llm_count_max")
+
+        if request.llm_count_min is not None:
+            scenario.llm_count_min = request.llm_count_min
+        if request.llm_count_max is not None:
+            scenario.llm_count_max = request.llm_count_max
         if request.compare_enabled is not None:
             scenario.compare_enabled = request.compare_enabled
-        if request.enable_llm_verification is not None:
-            scenario.enable_llm_verification = request.enable_llm_verification
-        if request.compare_result is not None:
-            scenario.compare_result = request.compare_result
-        if request.compare_process is not None:
-            scenario.compare_process = request.compare_process
 
         result = await self.repo.update(scenario)
         logger.info(f"Updated scenario: {scenario_id}")

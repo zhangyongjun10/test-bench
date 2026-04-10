@@ -1,44 +1,49 @@
-"""比对结果仓储"""
+"""Comparison result repository interfaces and SQLAlchemy implementation."""
 
 from abc import ABC, abstractmethod
 from typing import Optional
 from uuid import UUID
-from sqlalchemy import select
+
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.domain.entities.comparison import ComparisonResult, ComparisonStatus
+
+from app.domain.entities.comparison import ComparisonResult
 
 
 class ComparisonRepository(ABC):
-    """比对结果仓储接口"""
+    """Repository interface for comparison results."""
 
     @abstractmethod
     async def create(self, session: AsyncSession, comparison: ComparisonResult) -> ComparisonResult:
-        """创建比对记录"""
-        pass
+        """Create a comparison result."""
 
     @abstractmethod
-    async def get_by_execution_id(self, session: AsyncSession, execution_id: UUID) -> Optional[ComparisonResult]:
-        """获取执行最新的比对结果"""
-        pass
+    async def get_by_execution_id(
+        self, session: AsyncSession, execution_id: UUID
+    ) -> Optional[ComparisonResult]:
+        """Return the latest comparison result for an execution."""
 
     @abstractmethod
     async def update(self, session: AsyncSession, comparison: ComparisonResult) -> ComparisonResult:
-        """更新比对记录"""
-        pass
+        """Persist updates to an existing comparison result."""
+
+    @abstractmethod
+    async def delete_by_execution_id(self, session: AsyncSession, execution_id: UUID) -> int:
+        """Delete all comparison results for an execution."""
 
 
 class SQLAlchemyComparisonRepository(ComparisonRepository):
-    """SQLAlchemy 实现比对结果仓储"""
+    """SQLAlchemy-backed comparison result repository."""
 
     async def create(self, session: AsyncSession, comparison: ComparisonResult) -> ComparisonResult:
-        """创建比对记录"""
         session.add(comparison)
         await session.commit()
         await session.refresh(comparison)
         return comparison
 
-    async def get_by_execution_id(self, session: AsyncSession, execution_id: UUID) -> Optional[ComparisonResult]:
-        """获取执行最新的比对结果"""
+    async def get_by_execution_id(
+        self, session: AsyncSession, execution_id: UUID
+    ) -> Optional[ComparisonResult]:
         stmt = (
             select(ComparisonResult)
             .where(ComparisonResult.execution_id == execution_id)
@@ -49,7 +54,12 @@ class SQLAlchemyComparisonRepository(ComparisonRepository):
         return result.scalar_one_or_none()
 
     async def update(self, session: AsyncSession, comparison: ComparisonResult) -> ComparisonResult:
-        """更新比对记录"""
         await session.commit()
         await session.refresh(comparison)
         return comparison
+
+    async def delete_by_execution_id(self, session: AsyncSession, execution_id: UUID) -> int:
+        stmt = delete(ComparisonResult).where(ComparisonResult.execution_id == execution_id)
+        result = await session.execute(stmt)
+        await session.commit()
+        return result.rowcount or 0

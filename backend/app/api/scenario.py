@@ -24,10 +24,13 @@ async def create_scenario(
 ) -> Response[ScenarioResponse]:
     """创建测试场景"""
     service = ScenarioService(session)
-    scenario = await service.create_scenario(request)
-    return Response[ScenarioResponse](
-        data=ScenarioResponse.model_validate(scenario)
-    )
+    try:
+        scenario = await service.create_scenario(request)
+        return Response[ScenarioResponse](
+            data=ScenarioResponse.model_validate(scenario)
+        )
+    except ValueError as e:
+        return Response(code=1, message=str(e), data=None)
 
 
 @router.get("")
@@ -72,12 +75,15 @@ async def update_scenario(
 ) -> Response[ScenarioResponse]:
     """更新场景"""
     service = ScenarioService(session)
-    scenario = await service.update_scenario(scenario_id, request)
-    if not scenario:
-        return Response(code=404, message="Scenario not found", data=None)
-    return Response[ScenarioResponse](
-        data=ScenarioResponse.model_validate(scenario)
-    )
+    try:
+        scenario = await service.update_scenario(scenario_id, request)
+        if not scenario:
+            return Response(code=404, message="Scenario not found", data=None)
+        return Response[ScenarioResponse](
+            data=ScenarioResponse.model_validate(scenario)
+        )
+    except ValueError as e:
+        return Response(code=1, message=str(e), data=None)
 
 
 @router.delete("/{scenario_id}")
@@ -207,14 +213,7 @@ async def set_baseline_from_execution(
             return json.dumps(input_content, ensure_ascii=False)
 
     # 提取 tool calls
-    tool_calls = []
-    for span in spans:
-        if span.span_type == 'tool':
-            tool_calls.append({
-                'name': span.name,
-                'input': extract_clean_content(span.input),
-                'output': extract_clean_content(span.output),
-            })
+    # LLM-only mode no longer extracts or stores baseline_tool_calls.
 
     # 提取最终 llm output
     # 优先使用 execution.original_response（执行返回的最终结果），如果没有再去 trace 找
@@ -229,8 +228,7 @@ async def set_baseline_from_execution(
             last_llm_output = extract_clean_content(output)
 
     # 更新场景基线
-    scenario.baseline_tool_calls = json.dumps(tool_calls, ensure_ascii=False) if tool_calls else None
     scenario.baseline_result = last_llm_output
     await scenario_repo.update(scenario)
 
-    return Response[None](code=0, message=f"Baseline set successfully: {len(tool_calls)} tool calls extracted", data=None)
+    return Response[None](code=0, message="Baseline set successfully", data=None)

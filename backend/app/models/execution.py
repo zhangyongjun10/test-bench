@@ -2,9 +2,7 @@
 
 from uuid import UUID
 from datetime import datetime
-from typing import Optional
-from pydantic import BaseModel
-from app.domain.entities.execution import ExecutionStatus
+from pydantic import BaseModel, ConfigDict
 
 
 class CreateExecutionRequest(BaseModel):
@@ -12,30 +10,30 @@ class CreateExecutionRequest(BaseModel):
 
     agent_id: UUID
     scenario_id: UUID
-    llm_model_id: Optional[UUID] = None
+    llm_model_id: UUID
 
 
 class ExecutionResponse(BaseModel):
     """执行响应"""
 
     id: UUID
-    agent_id: Optional[UUID]
-    scenario_id: Optional[UUID]
-    llm_model_id: Optional[UUID]
-    trace_id: Optional[str]
+    agent_id: UUID | None
+    scenario_id: UUID | None
+    llm_model_id: UUID | None
+    user_session: str | None
+    trace_id: str | None
     status: str
-    comparison_score: Optional[float]
-    comparison_passed: Optional[bool]
-    error_message: Optional[str]
-    original_request: Optional[str]
-    original_response: Optional[str]
-    started_at: Optional[datetime]
-    completed_at: Optional[datetime]
+    comparison_score: float | None
+    comparison_passed: bool | None
+    error_message: str | None
+    original_request: str | None
+    original_response: str | None
+    started_at: datetime | None
+    completed_at: datetime | None
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class SpanResponse(BaseModel):
@@ -44,11 +42,14 @@ class SpanResponse(BaseModel):
     span_id: str
     span_type: str
     name: str
-    input: Optional[str]
-    output: Optional[str]
-    duration_ms: Optional[int]
-    ttft_ms: Optional[float]
-    tpot_ms: Optional[float]
+    provider: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    input: str | None
+    output: str | None
+    duration_ms: int | None
+    ttft_ms: float | None
+    tpot_ms: float | None
 
 
 class ExecutionTraceResponse(BaseModel):

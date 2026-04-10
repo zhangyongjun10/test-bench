@@ -1,29 +1,48 @@
-import React, { useState, useEffect } from 'react'
-import { Table, Button, Space, Input, Modal, Form, message, Popconfirm, Select, Divider, Switch, InputNumber } from 'antd'
-const { TextArea } = Input
-import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons'
+import { useEffect, useState } from 'react'
+import {
+  Button,
+  Form,
+  Input,
+  InputNumber,
+  Modal,
+  Popconfirm,
+  Select,
+  Space,
+  Switch,
+  Table,
+  Tag,
+  message,
+} from 'antd'
+import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
-import type { Scenario, Agent } from '../api/types'
-import { scenarioApi } from '../api/client'
-import { agentApi } from '../api/client'
 
-const ScenarioList: React.FC = () => {
+import { agentApi, scenarioApi } from '../api/client'
+import type { Agent, Scenario } from '../api/types'
+
+const { TextArea } = Input
+
+const formatLocalTime = (value: string) => {
+  const date = new Date(value)
+  return new Date(date.getTime() + 8 * 60 * 60 * 1000).toLocaleString('zh-CN')
+}
+
+const ScenarioList = () => {
   const [scenarios, setScenarios] = useState<Scenario[]>([])
   const [agents, setAgents] = useState<Agent[]>([])
-  const [currentAgentId, setCurrentAgentId] = useState<string>('')
-  const [keyword, setKeyword] = useState('')
+  const [currentAgentId, setCurrentAgentId] = useState<string>("")
+  const [keyword, setKeyword] = useState("")
   const [loading, setLoading] = useState(false)
   const [modalVisible, setModalVisible] = useState(false)
   const [isEdit, setIsEdit] = useState(false)
-  const [currentId, setCurrentId] = useState<string>('')
+  const [currentId, setCurrentId] = useState("")
   const [form] = Form.useForm()
 
   const loadAgents = async () => {
     try {
       const res = await agentApi.list()
       setAgents(res.data || [])
-    } catch (e: any) {
-      message.error(e.message)
+    } catch (error: any) {
+      message.error(error.message)
     }
   }
 
@@ -32,37 +51,34 @@ const ScenarioList: React.FC = () => {
     try {
       const res = await scenarioApi.list(currentAgentId || undefined, keyword || undefined)
       setScenarios(res.data || [])
-    } catch (e: any) {
-      message.error(e.message)
+    } catch (error: any) {
+      message.error(error.message)
     } finally {
       setLoading(false)
     }
   }
 
   useEffect(() => {
-    loadAgents()
-    loadData()
+    void loadAgents()
   }, [])
 
   useEffect(() => {
-    loadData()
+    void loadData()
   }, [currentAgentId, keyword])
 
-  const handleCreate = () => {
+  const openCreateModal = () => {
     setIsEdit(false)
-    setCurrentId('')
+    setCurrentId("")
     form.resetFields()
     form.setFieldsValue({
-      process_threshold: 60.0,
-      result_threshold: 60.0,
-      tool_count_tolerance: 0,
+      llm_count_min: 0,
+      llm_count_max: 999,
       compare_enabled: true,
-      enable_llm_verification: true,
     })
     setModalVisible(true)
   }
 
-  const handleEdit = (record: Scenario) => {
+  const openEditModal = (record: Scenario) => {
     setIsEdit(true)
     setCurrentId(record.id)
     form.setFieldsValue({
@@ -70,13 +86,10 @@ const ScenarioList: React.FC = () => {
       name: record.name,
       description: record.description,
       prompt: record.prompt,
-      baseline_tool_calls: record.baseline_tool_calls,
       baseline_result: record.baseline_result,
-      process_threshold: record.process_threshold ?? 60.0,
-      result_threshold: record.result_threshold ?? 60.0,
-      tool_count_tolerance: record.tool_count_tolerance ?? 0,
-      compare_enabled: record.compare_enabled ?? true,
-      enable_llm_verification: record.enable_llm_verification ?? true,
+      llm_count_min: record.llm_count_min,
+      llm_count_max: record.llm_count_max,
+      compare_enabled: record.compare_enabled,
     })
     setModalVisible(true)
   }
@@ -84,10 +97,10 @@ const ScenarioList: React.FC = () => {
   const handleDelete = async (id: string) => {
     try {
       await scenarioApi.delete(id)
-      message.success('删除成功')
-      loadData()
-    } catch (e: any) {
-      message.error(e.message)
+      message.success("删除成功")
+      await loadData()
+    } catch (error: any) {
+      message.error(error.message)
     }
   }
 
@@ -96,71 +109,74 @@ const ScenarioList: React.FC = () => {
       const values = await form.validateFields()
       if (isEdit) {
         await scenarioApi.update(currentId, values)
-        message.success('更新成功')
+        message.success("更新成功")
       } else {
         await scenarioApi.create(values)
-        message.success('创建成功')
+        message.success("创建成功")
       }
       setModalVisible(false)
-      loadData()
-    } catch (e: any) {
-      message.error(e.message)
+      await loadData()
+    } catch (error: any) {
+      if (error?.errorFields) {
+        return
+      }
+      message.error(error.message)
     }
   }
 
   const columns: ColumnsType<Scenario> = [
     {
-      title: '名称',
-      dataIndex: 'name',
-      key: 'name',
+      title: "名称",
+      dataIndex: "name",
+      key: "name",
       width: 180,
     },
     {
-      title: '所属 Agent',
-      dataIndex: 'agent_name',
-      key: 'agent_name',
-      width: 150,
-      render: text => text || '-',
+      title: "所属 Agent",
+      dataIndex: "agent_name",
+      key: "agent_name",
+      width: 160,
+      render: value => value || "-",
     },
     {
-      title: '描述',
-      dataIndex: 'description',
-      key: 'description',
+      title: "LLM 调用范围",
+      key: "llm_count_range",
+      width: 160,
+      render: (_, record) => `${record.llm_count_min} ~ ${record.llm_count_max}`,
     },
     {
-      title: '比对结果',
-      dataIndex: 'compare_result',
-      key: 'compare_result',
-      width: 100,
-      render: v => v ? '是' : '否',
+      title: "自动比对",
+      dataIndex: "compare_enabled",
+      key: "compare_enabled",
+      width: 110,
+      render: value => (
+        <Tag color={value ? "green" : "default"}>{value ? "启用" : "关闭"}</Tag>
+      ),
     },
     {
-      title: '创建时间',
-      dataIndex: 'created_at',
-      key: 'created_at',
-      width: 170,
-      render: (text: string) => {
-        // 后端存储的是 UTC 时间，转换为北京时间 (+8)
-        const d = new Date(text)
-        return new Date(d.getTime() + 8 * 60 * 60 * 1000).toLocaleString('zh-CN')
-      },
+      title: "描述",
+      dataIndex: "description",
+      key: "description",
+      render: value => value || "-",
     },
     {
-      title: '操作',
-      key: 'action',
-      width: 120,
-      fixed: 'right',
+      title: "创建时间",
+      dataIndex: "created_at",
+      key: "created_at",
+      width: 180,
+      render: formatLocalTime,
+    },
+    {
+      title: "操作",
+      key: "action",
+      width: 140,
+      fixed: "right",
       render: (_, record) => (
         <Space size="middle">
-          <Button
-            type="link"
-            size="small"
-            icon={<EditOutlined />}
-            onClick={() => handleEdit(record)}
-          >
+          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEditModal(record)}>
             编辑
           </Button>
-          <Popconfirm title="确认删除吗？" onConfirm={() => handleDelete(record.id)}>
+          <Popconfirm title="确认删除这个场景吗？" onConfirm={() => void handleDelete(record.id)}>
             <Button type="link" size="small" danger icon={<DeleteOutlined />}>
               删除
             </Button>
@@ -172,114 +188,114 @@ const ScenarioList: React.FC = () => {
 
   return (
     <div>
-      <div style={{ marginBottom: 16, display: 'flex', gap: 16, alignItems: 'center' }}>
+      <div style={{ marginBottom: 16, display: "flex", gap: 16, alignItems: "center" }}>
         <Select
           placeholder="选择 Agent"
-          style={{ width: 200 }}
+          style={{ width: 220 }}
           allowClear
           value={currentAgentId || undefined}
-          onChange={setCurrentAgentId}
-          options={agents.map(a => ({ label: a.name, value: a.id }))}
+          onChange={value => setCurrentAgentId(value || "")}
+          options={agents.map(agent => ({ label: agent.name, value: agent.id }))}
         />
         <Input.Search
           placeholder="搜索场景名称"
           allowClear
-          style={{ width: 250 }}
-          onSearch={setKeyword}
+          style={{ width: 260 }}
+          onSearch={value => setKeyword(value)}
+          onChange={event => {
+            if (!event.target.value) {
+              setKeyword("")
+            }
+          }}
         />
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          onClick={handleCreate}
-        >
+        <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
           添加场景
         </Button>
       </div>
-      <Table
-        columns={columns}
-        dataSource={scenarios}
-        loading={loading}
-        rowKey="id"
-        pagination={{ pageSize: 10 }}
-      />
+
+      <Table columns={columns} dataSource={scenarios} loading={loading} rowKey="id" pagination={{ pageSize: 10 }} />
+
       <Modal
-        title={isEdit ? '编辑场景' : '添加场景'}
+        title={isEdit ? "编辑场景" : "添加场景"}
         open={modalVisible}
-        onOk={handleSubmit}
+        onOk={() => void handleSubmit()}
         onCancel={() => setModalVisible(false)}
-        width={700}
+        width={720}
       >
         <Form form={form} layout="vertical">
           <Form.Item
             name="agent_id"
             label="所属 Agent"
-            rules={[{ required: true, message: '请选择 Agent' }]}
+            rules={[{ required: true, message: "请选择 Agent" }]}
           >
-            <Select placeholder="选择 Agent" options={agents.map(a => ({ label: a.name, value: a.id }))} />
+            <Select
+              placeholder="选择 Agent"
+              options={agents.map(agent => ({ label: agent.name, value: agent.id }))}
+            />
           </Form.Item>
+
           <Form.Item
             name="name"
             label="场景名称"
-            rules={[{ required: true, message: '请输入场景名称' }]}
+            rules={[{ required: true, message: "请输入场景名称" }]}
           >
-            <Input placeholder="例如: 客服问答测试" />
+            <Input placeholder="例如：客服问答测试" />
           </Form.Item>
+
           <Form.Item name="description" label="描述">
-            <Input.TextArea placeholder="描述这个场景测试的内容" rows={2} />
+            <TextArea rows={2} placeholder="描述这个场景的测试目标" />
           </Form.Item>
+
           <Form.Item
             name="prompt"
-            label="基准问题/提示词"
-            rules={[{ required: true, message: '请输入基准提示词' }]}
+            label="测试 Prompt"
+            rules={[{ required: true, message: "请输入测试 Prompt" }]}
           >
-            <Input.TextArea placeholder="输入给 Agent 的问题/提示词" rows={4} />
+            <TextArea rows={4} placeholder="输入发送给 Agent 的问题或提示词" />
           </Form.Item>
-          <Form.Item name="baseline_result" label="基准预期结果">
-            <Input.TextArea placeholder="输入预期的输出结果，用于结果比对" rows={6} />
+
+          <Form.Item name="baseline_result" label="基线输出">
+            <TextArea rows={6} placeholder="可选。用于最终输出一致性判断。" />
           </Form.Item>
-          <Form.Item name="baseline_tool_calls" label="工具调用基线 (JSON)">
-            <Input.TextArea placeholder="JSON 格式，包含工具调用基线，例如: [{&quot;name&quot;: &quot;tool_name&quot;, &quot;input&quot;: &quot;...&quot;, &quot;output&quot;: &quot;...&quot;}]" rows={8} />
-          </Form.Item>
-          <Divider />
-          <div style={{ fontWeight: 'bold', marginBottom: 8 }}>比对配置</div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+            <Form.Item
+              name="llm_count_min"
+              label="LLM 最小调用次数"
+              rules={[{ required: true, message: "请输入最小次数" }]}
+            >
+              <InputNumber min={0} precision={0} style={{ width: "100%" }} />
+            </Form.Item>
+
+            <Form.Item
+              name="llm_count_max"
+              label="LLM 最大调用次数"
+              dependencies={["llm_count_min"]}
+              rules={[
+                { required: true, message: "请输入最大次数" },
+                ({ getFieldValue }) => ({
+                  validator(_, value: number | undefined) {
+                    const minValue = getFieldValue("llm_count_min")
+                    if (value == null || minValue == null || value >= minValue) {
+                      return Promise.resolve()
+                    }
+                    return Promise.reject(new Error("最大次数不能小于最小次数"))
+                  },
+                }),
+              ]}
+            >
+              <InputNumber min={0} precision={0} style={{ width: "100%" }} />
+            </Form.Item>
+          </div>
+
           <Form.Item
             name="compare_enabled"
-            valuePropName="checked"
-            initialValue={true}
             label="启用自动比对"
-          >
-            <Switch />
-          </Form.Item>
-          <Form.Item
-            name="enable_llm_verification"
             valuePropName="checked"
-            initialValue={true}
-            label="启用 LLM 语义验证"
+            initialValue
           >
             <Switch />
           </Form.Item>
-          <Form.Item
-            name="process_threshold"
-            label="过程通过阈值"
-            initialValue={60}
-          >
-            <InputNumber min={0} max={100} step={1} placeholder="0-100" style={{ width: 120 }} />
-          </Form.Item>
-          <Form.Item
-            name="result_threshold"
-            label="结果通过阈值"
-            initialValue={60}
-          >
-            <InputNumber min={0} max={100} step={1} placeholder="0-100" style={{ width: 120 }} />
-          </Form.Item>
-          <Form.Item
-            name="tool_count_tolerance"
-            label="工具次数容忍度"
-            initialValue={0}
-          >
-            <InputNumber min={0} step={1} placeholder="允许工具调用次数差异" style={{ width: 120 }} />
-          </Form.Item>
-          <Divider />
         </Form>
       </Modal>
     </div>

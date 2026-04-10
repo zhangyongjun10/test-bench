@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.domain.entities.llm import LLMModel
 from app.domain.repositories.llm_repo import LLMRepository, SQLAlchemyLLMRepository
 from app.core.encryption import encryption_service
-from app.models.llm import LLMCreate, LLMUpdate
+from app.models.llm import DEFAULT_COMPARISON_PROMPT, LLMCreate, LLMUpdate
 from app.core.logger import logger
 from app.clients.llm_client import LLMClient, OpenAICompatibleLLMClient
 
@@ -15,6 +15,11 @@ class LLMService:
     def __init__(self, session: AsyncSession):
         self.repo: LLMRepository = SQLAlchemyLLMRepository(session)
         self.session = session
+
+    @staticmethod
+    def _normalize_comparison_prompt(prompt: str | None) -> str:
+        prompt = (prompt or "").strip()
+        return prompt or DEFAULT_COMPARISON_PROMPT
 
     async def create_llm(self, request: LLMCreate) -> LLMModel:
         """创建 LLM 模型"""
@@ -26,6 +31,7 @@ class LLMService:
             api_key_encrypted=encryption_service.encrypt(request.api_key),
             temperature=request.temperature,
             max_tokens=request.max_tokens,
+            comparison_prompt=self._normalize_comparison_prompt(request.comparison_prompt),
             is_default=False
         )
         result = await self.repo.create(llm)
@@ -52,6 +58,8 @@ class LLMService:
             model.temperature = request.temperature
         if request.max_tokens is not None:
             model.max_tokens = request.max_tokens
+        if request.comparison_prompt is not None:
+            model.comparison_prompt = self._normalize_comparison_prompt(request.comparison_prompt)
 
         result = await self.repo.update(model)
         logger.info(f"Updated LLM model: {model_id}")

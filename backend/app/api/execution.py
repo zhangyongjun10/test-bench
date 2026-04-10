@@ -1,10 +1,9 @@
 """Execution API"""
 
 import json
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from uuid import UUID
-from datetime import datetime
-from fastapi import APIRouter, Depends, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import get_db
 from app.core.logger import logger
@@ -99,6 +98,9 @@ async def get_trace(
             span_id=span.span_id,
             span_type=span.span_type,
             name=span.name,
+            provider=span.provider,
+            input_tokens=span.metrics.input_tokens,
+            output_tokens=span.metrics.output_tokens,
             input=span.input,
             output=span.output,
             duration_ms=span.duration_ms,
@@ -140,8 +142,10 @@ async def get_comparison(
 
     # 解析 details_json，处理解析失败
     details: Dict[str, Any] = {
-        'tool_comparisons': [],
-        'llm_comparison': None
+        "tool_comparisons": [],
+        "llm_comparison": None,
+        "llm_count_check": None,
+        "final_output_comparison": None,
     }
     if comparison.details_json:
         try:
@@ -158,8 +162,22 @@ async def get_comparison(
         process_score=comparison.process_score,
         result_score=comparison.result_score,
         overall_passed=comparison.overall_passed,
-        tool_comparisons=details.get('tool_comparisons', []),
-        llm_comparison=details.get('llm_comparison'),
+        tool_comparisons=details.get("tool_comparisons", []),
+        llm_comparison=details.get("llm_comparison"),
+        llm_count_check=details.get("llm_count_check"),
+        final_output_comparison=(
+            details.get("final_output_comparison")
+            or (
+                {
+                    "baseline_output": details["llm_comparison"].get("baseline_output", ""),
+                    "actual_output": details["llm_comparison"].get("actual_output", ""),
+                    "consistent": details["llm_comparison"].get("consistent", False),
+                    "reason": details["llm_comparison"].get("reason", ""),
+                }
+                if isinstance(details.get("llm_comparison"), dict)
+                else None
+            )
+        ),
         status=comparison.status,
         error_message=comparison.error_message,
         retry_count=comparison.retry_count,
@@ -173,7 +191,7 @@ async def get_comparison(
 
 async def run_recompare(
     execution_id: UUID,
-    llm_model_id: Optional[UUID] = None,
+    llm_model_id: UUID,
 ) -> None:
     """后台任务：重新执行比对（自建独立 Session，不依赖请求 Session 生命周期）"""
     from app.core.db import AsyncSessionLocal
@@ -185,7 +203,7 @@ async def run_recompare(
 async def _run_recompare_with_session(
     session: AsyncSession,
     execution_id: UUID,
-    llm_model_id: Optional[UUID] = None,
+    llm_model_id: UUID,
 ) -> None:
     from app.domain.entities.comparison import ComparisonResult, ComparisonStatus
     from app.domain.repositories.comparison_repo import SQLAlchemyComparisonRepository
@@ -193,8 +211,7 @@ async def _run_recompare_with_session(
     from app.services.comparison import ComparisonService
     from app.services.trace_fetcher import TraceFetcherImpl
     from app.services.llm_service import LLMService
-    from app.clients.llm_client import DummyLLMClient
-    from datetime import datetime
+    from datetime import UTC, datetime
 
     execution_repo = SQLAlchemyExecutionRepository(session)
     execution = await execution_repo.get_by_id(execution_id)
@@ -214,19 +231,13 @@ async def _run_recompare_with_session(
 
     # 获取 LLM client（如果需要）
     llm_service = LLMService(session)
-    llm_client = None
+    llm_model = await llm_service.get_llm(llm_model_id)
     # 使用传入的 llm_model_id，如果没有则使用 execution 上的
-    used_llm_model_id = llm_model_id or execution.llm_model_id
-    if used_llm_model_id:
-        llm_model = await llm_service.get_llm(used_llm_model_id)
-        if llm_model:
-            llm_client = llm_service.get_client(llm_model)
-        else:
-            logger.warning(f"LLM model not found: {used_llm_model_id}, continuing without LLM verification")
-            llm_client = DummyLLMClient()
+    if llm_model:
+        llm_client = llm_service.get_client(llm_model)
     else:
-        logger.warning(f"No llm_model_id for execution: {execution_id}, continuing without LLM verification")
-        llm_client = DummyLLMClient()
+        logger.error(f"LLM model not found for recompare: {llm_model_id}")
+        return
 
     # 创建新的比对记录，先设置为 processing
     comparison_repo = SQLAlchemyComparisonRepository()
@@ -255,6 +266,7 @@ async def _run_recompare_with_session(
             scenario=scenario,
             execution=execution,
             trace_spans=spans,
+            llm_model=llm_model,
         )
 
         # 更新比对结果到已创建的记录
@@ -264,7 +276,7 @@ async def _run_recompare_with_session(
         comparison.details_json = completed_comparison.details_json
         comparison.status = completed_comparison.status
         comparison.error_message = completed_comparison.error_message
-        comparison.completed_at = datetime.utcnow()
+        comparison.completed_at = datetime.now(UTC)
         await session.commit()
 
         # 更新 execution 状态
@@ -273,13 +285,9 @@ async def _run_recompare_with_session(
         else:
             execution.status = ExecutionStatus.COMPLETED
 
-        if comparison.process_score is not None and comparison.result_score is not None:
-            execution.comparison_score = (comparison.process_score + comparison.result_score) / 2
-        elif comparison.process_score is not None:
-            execution.comparison_score = comparison.process_score
-        elif comparison.result_score is not None:
-            execution.comparison_score = comparison.result_score
+        execution.comparison_score = None
         execution.comparison_passed = comparison.overall_passed
+        execution.error_message = None
         await execution_repo.update(execution)
 
         logger.info(f"Recompare completed: {execution_id}, overall_passed={comparison.overall_passed}")
@@ -288,7 +296,7 @@ async def _run_recompare_with_session(
         logger.error(f"Recompare failed for execution {execution_id}: {str(e)}", exc_info=True)
         comparison.status = ComparisonStatus.FAILED
         comparison.error_message = str(e)
-        comparison.completed_at = datetime.utcnow()
+        comparison.completed_at = datetime.now(UTC)
         await session.commit()
 
 
@@ -297,7 +305,7 @@ async def _run_recompare_with_session(
 async def trigger_recompare(
     execution_id: UUID,
     background_tasks: BackgroundTasks,
-    llm_model_id: Optional[UUID] = None,
+    llm_model_id: UUID = Query(...),
     session: AsyncSession = Depends(get_db)
 ) -> Response[RecompareResponse]:
     """触发重新比对，后台任务执行
@@ -310,6 +318,11 @@ async def trigger_recompare(
     execution = await execution_repo.get_by_id(execution_id)
     if not execution:
         return Response(code=404, message="Execution not found", data=None)
+
+    llm_service = LLMService(session)
+    llm_model = await llm_service.get_llm(llm_model_id)
+    if not llm_model:
+        return Response(code=404, message="LLM model not found", data=None)
 
     background_tasks.add_task(run_recompare, execution_id, llm_model_id)
     return Response[RecompareResponse](data=RecompareResponse(

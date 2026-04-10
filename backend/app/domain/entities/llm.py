@@ -20,6 +20,7 @@ class LLMModel(Base):
     api_key_encrypted = Column(Text, nullable=False)
     temperature = Column(Double, nullable=False, default=0.0)
     max_tokens = Column(Integer, nullable=False, default=1024)
+    comparison_prompt = Column(Text)
     is_default = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)

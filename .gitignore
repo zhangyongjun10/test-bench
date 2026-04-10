@@ -52,6 +52,7 @@ dist-ssr/
 # Playwright
 .playwright/
 .playwright-mcp/
+.playwright-cli/
 test-results/
 playwright-report/
 

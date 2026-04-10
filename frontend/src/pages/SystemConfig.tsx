@@ -1,14 +1,13 @@
-import React, { useState, useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Card, Form, Input, Button, message, Radio, Space } from 'antd'
 import { ExperimentOutlined } from '@ant-design/icons'
-import type { ClickHouseConfig, ClickHouseConfigUpdate, TestResponse } from '../api/types'
+import type { ClickHouseConfigUpdate, TestResponse } from '../api/types'
 import { systemApi } from '../api/client'
 
-const SystemConfig: React.FC = () => {
+const SystemConfig = () => {
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
   const [testLoading, setTestLoading] = useState(false)
-  const [initialLoaded, setInitialLoaded] = useState(false)
 
   const loadData = async () => {
     try {
@@ -16,10 +15,9 @@ const SystemConfig: React.FC = () => {
       if (res.data) {
         form.setFieldsValue(res.data)
       }
-      setInitialLoaded(true)
     } catch (e: any) {
       // 404 是正常的，还没配置
-      setInitialLoaded(true)
+      void e
     }
   }
 
