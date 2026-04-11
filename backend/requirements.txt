@@ -17,3 +17,4 @@ pytest-asyncio>=0.21
 asyncpg>=0.28
 apscheduler>=3.10
 python-Levenshtein>=0.25.0
+pytz>=2023.3

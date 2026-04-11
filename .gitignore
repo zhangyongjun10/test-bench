@@ -59,6 +59,9 @@ playwright-report/
 # Docker
 *.log
 
+# Logs
+logs/
+
 # Database
 *.db
 *.sqlite
