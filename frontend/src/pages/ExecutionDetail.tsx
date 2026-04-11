@@ -24,6 +24,7 @@ import type {
   ExecutionJob,
   ExecutionTrace,
   LLMModel,
+  ReplayTask,
   Scenario,
 } from '../api/types'
 
@@ -512,6 +513,7 @@ const ExecutionDetail = () => {
   const [trace, setTrace] = useState<ExecutionTrace | null>(null)
   const [comparisonDetail, setComparisonDetail] = useState<DetailedComparisonResult | null>(null)
   const [comparisonHistory, setComparisonHistory] = useState<DetailedComparisonResult[]>([])
+  const [replayHistory, setReplayHistory] = useState<ReplayTask[]>([])
   const [selectedComparisonId, setSelectedComparisonId] = useState<string>()
   const [llmModels, setLlmModels] = useState<LLMModel[]>([])
   const [selectedLlmId, setSelectedLlmId] = useState<string>()
@@ -592,6 +594,15 @@ const ExecutionDetail = () => {
     }
   }
 
+  const loadReplayHistory = async (executionId: string) => {
+    try {
+      const res = await executionApi.getReplays(executionId, 20, 0)
+      setReplayHistory(res.data.items || [])
+    } catch (error) {
+      console.error('Failed to load replay history:', error)
+    }
+  }
+
   const startPolling = (executionId: string) => {
     clearPolling()
     setPollTimeout(false)
@@ -641,6 +652,7 @@ const ExecutionDetail = () => {
         executionData.status === 'failed'
       ) {
         await loadTrace(id)
+        await loadReplayHistory(id)
         const comparisonDone = await loadComparison(id)
         if (!comparisonDone) {
           startPolling(id)
@@ -1207,6 +1219,56 @@ const ExecutionDetail = () => {
       <Card
         title={
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span>回放历史</span>
+            <Tag color="blue" style={{ marginInlineEnd: 0, borderRadius: 999, paddingInline: 10 }}>
+              {replayHistory.length} 次
+            </Tag>
+          </div>
+        }
+        style={{
+          marginTop: 18,
+          borderRadius: 24,
+          border: '1px solid rgba(226,232,240,0.95)',
+          boxShadow: '0 20px 45px rgba(15, 23, 42, 0.06)',
+        }}
+      >
+        {replayHistory.length === 0 ? (
+          <Alert type="info" showIcon message="暂无链路回放记录" />
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12 }}>
+            {replayHistory.map(item => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => navigate(`/replays/${item.id}`)}
+                style={{
+                  textAlign: 'left',
+                  border: '1px solid #dbeafe',
+                  borderRadius: 16,
+                  padding: 14,
+                  cursor: 'pointer',
+                  background: '#f8fbff',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                  <strong>{item.baseline_source === 'reference_execution' ? '当前执行比较' : '场景基线比较'}</strong>
+                  <Tag color={item.overall_passed ? 'green' : item.overall_passed === false ? 'red' : 'blue'}>
+                    {item.overall_passed ? '通过' : item.overall_passed === false ? '未通过' : STATUS_TEXT[item.status] || item.status}
+                  </Tag>
+                </div>
+                <div style={{ color: '#64748b', fontSize: 12 }}>时间：{formatLocalTime(item.created_at)}</div>
+                <div style={{ color: '#64748b', fontSize: 12, marginTop: 4, wordBreak: 'break-all' }}>
+                  回放执行：{item.replay_execution_id}
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      <Card
+        title={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span>Trace 回放</span>
             <Tag color="blue" style={{ marginInlineEnd: 0, borderRadius: 999, paddingInline: 10 }}>
               {visibleTraceSpans.length} spans
@@ -1234,11 +1296,9 @@ const ExecutionDetail = () => {
             style={{
               background: 'transparent',
             }}
-          >
-            {visibleTraceSpans.map(span => (
-              <Collapse.Panel
-                key={span.span_id}
-                header={
+            items={visibleTraceSpans.map(span => ({
+              key: span.span_id,
+              label: (
                   <div
                     style={{
                       display: 'flex',
@@ -1290,8 +1350,8 @@ const ExecutionDetail = () => {
                       </div>
                     </div>
                   </div>
-                }
-              >
+                ),
+              children: (
                 <div
                   style={{
                     background: '#fff',
@@ -1453,9 +1513,9 @@ const ExecutionDetail = () => {
                     </div>
                   )}
                 </div>
-              </Collapse.Panel>
-            ))}
-          </Collapse>
+              ),
+            }))}
+          />
         )}
 
         {!traceLoading && visibleTraceSpans.length === 0 && (

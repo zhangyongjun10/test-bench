@@ -17,6 +17,9 @@ class ExecutionJob(Base):
     scenario_id = Column(UUID(as_uuid=True), ForeignKey("scenarios.id"), nullable=False)
     llm_model_id = Column(UUID(as_uuid=True), ForeignKey("llm_models.id"))
     user_session = Column(String(255), nullable=False)
+    run_source = Column(String(50), nullable=False, default="normal")
+    parent_execution_id = Column(UUID(as_uuid=True), ForeignKey("execution_jobs.id"), nullable=True)
+    request_snapshot_json = Column(Text)
     trace_id = Column(String(255))
     status = Column(String(50), nullable=False)
     original_request = Column(Text)
@@ -39,3 +42,8 @@ class ExecutionStatus:
     COMPLETED = "completed"
     COMPLETED_WITH_MISMATCH = "completed_with_mismatch"
     FAILED = "failed"
+
+
+class ExecutionRunSource:
+    NORMAL = "normal"
+    REPLAY = "replay"

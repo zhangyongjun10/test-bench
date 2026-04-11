@@ -16,7 +16,7 @@ from app.models.execution import (
     SpanResponse
 )
 from app.models.comparison import DetailedComparisonResponse, RecompareResponse
-from app.domain.entities.comparison import ComparisonStatus
+from app.domain.entities.comparison import ComparisonSourceType, ComparisonStatus
 from app.domain.entities.execution import ExecutionStatus
 from app.domain.repositories.execution_repo import SQLAlchemyExecutionRepository
 from app.domain.repositories.comparison_repo import SQLAlchemyComparisonRepository
@@ -164,6 +164,9 @@ async def get_comparison(
         execution_id=comparison.execution_id,
         scenario_id=comparison.scenario_id,
         llm_model_id=comparison.llm_model_id,
+        replay_task_id=getattr(comparison, "replay_task_id", None),
+        source_type=getattr(comparison, "source_type", None),
+        baseline_source=getattr(comparison, "baseline_source", None),
         trace_id=comparison.trace_id,
         process_score=comparison.process_score,
         result_score=comparison.result_score,
@@ -224,6 +227,9 @@ async def list_comparisons(
                 execution_id=comparison.execution_id,
                 scenario_id=comparison.scenario_id,
                 llm_model_id=comparison.llm_model_id,
+                replay_task_id=getattr(comparison, "replay_task_id", None),
+                source_type=getattr(comparison, "source_type", None),
+                baseline_source=getattr(comparison, "baseline_source", None),
                 trace_id=comparison.trace_id,
                 process_score=comparison.process_score,
                 result_score=comparison.result_score,
@@ -306,6 +312,7 @@ async def _run_recompare_with_session(
         scenario_id=scenario.id,
         llm_model_id=llm_model_id,
         trace_id=execution.trace_id,
+        source_type=ComparisonSourceType.RECOMPARE,
         process_score=None,
         result_score=None,
         overall_passed=False,
@@ -365,6 +372,7 @@ async def _run_recompare_with_session(
         comparison.result_score = completed_comparison.result_score
         comparison.overall_passed = completed_comparison.overall_passed
         comparison.llm_model_id = completed_comparison.llm_model_id
+        comparison.source_type = ComparisonSourceType.RECOMPARE
         comparison.details_json = completed_comparison.details_json
         comparison.status = completed_comparison.status
         comparison.error_message = completed_comparison.error_message

@@ -9,7 +9,7 @@ from sqlalchemy import delete, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.entities.comparison import ComparisonResult
-from app.domain.entities.execution import ExecutionJob
+from app.domain.entities.execution import ExecutionJob, ExecutionRunSource
 
 
 class ExecutionRepository(ABC):
@@ -107,10 +107,12 @@ class SQLAlchemyExecutionRepository(ExecutionRepository):
         count_query = count_query.where(
             ExecutionJob.agent_id.isnot(None),
             ExecutionJob.scenario_id.isnot(None),
+            ExecutionJob.run_source == ExecutionRunSource.NORMAL,
         )
         data_query = data_query.where(
             ExecutionJob.agent_id.isnot(None),
             ExecutionJob.scenario_id.isnot(None),
+            ExecutionJob.run_source == ExecutionRunSource.NORMAL,
         )
 
         if agent_id:

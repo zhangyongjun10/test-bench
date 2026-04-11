@@ -63,6 +63,29 @@ def make_other_provider_llm_span(output: str) -> Span:
     )
 
 
+def make_tool_call_output() -> str:
+    return json.dumps(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "function": {
+                                    "name": "exec",
+                                    "arguments": '{"command":"curl example.com"}',
+                                }
+                            }
+                        ],
+                    }
+                }
+            ]
+        },
+        ensure_ascii=False,
+    )
+
+
 def make_execution() -> ExecutionJob:
     return ExecutionJob(
         id=uuid.uuid4(),
@@ -280,6 +303,77 @@ async def test_detailed_compare_only_uses_openai_provider_llm_spans():
     assert details["llm_count_check"]["actual_count"] == 2
     assert details["llm_count_check"]["passed"] is True
     assert details["final_output_comparison"]["actual_output"] == "openai final"
+
+
+@pytest.mark.asyncio
+async def test_detailed_compare_requires_last_openai_llm_span_to_be_text():
+    scenario = Scenario(
+        id=uuid.uuid4(),
+        agent_id=uuid.uuid4(),
+        name="scenario",
+        prompt="prompt",
+        baseline_result="previous text",
+        llm_count_min=2,
+        llm_count_max=2,
+        compare_enabled=True,
+    )
+    execution = make_execution()
+    client = FakeLLMClient(consistent=True, reason="should not be used")
+    service = ComparisonService(client)
+
+    result = await service.detailed_compare(
+        scenario=scenario,
+        execution=execution,
+        trace_spans=[
+            make_llm_span('{"choices":[{"message":{"content":"previous text"}}]}'),
+            make_llm_span(make_tool_call_output()),
+        ],
+        llm_model=make_model(),
+    )
+
+    details = json.loads(result.details_json)
+    assert details["llm_count_check"]["passed"] is True
+    assert details["final_output_comparison"]["actual_output"] == ""
+    assert details["final_output_comparison"]["reason"] == "Trace 中没有找到最终 LLM 输出"
+    assert result.overall_passed is False
+    assert client.prompts == []
+
+
+@pytest.mark.asyncio
+async def test_detailed_compare_with_baseline_requires_last_openai_llm_span_to_be_text():
+    scenario = Scenario(
+        id=uuid.uuid4(),
+        agent_id=uuid.uuid4(),
+        name="scenario",
+        prompt="prompt",
+        baseline_result="scenario baseline",
+        llm_count_min=1,
+        llm_count_max=2,
+        compare_enabled=True,
+    )
+    execution = make_execution()
+    client = FakeLLMClient(consistent=True, reason="should not be used")
+    service = ComparisonService(client)
+
+    result = await service.detailed_compare_with_baseline(
+        scenario=scenario,
+        execution=execution,
+        trace_spans=[
+            make_llm_span('{"choices":[{"message":{"content":"previous text"}}]}'),
+            make_llm_span(make_tool_call_output()),
+        ],
+        llm_model=make_model(),
+        baseline_output="previous text",
+        expected_min=2,
+        expected_max=2,
+    )
+
+    details = json.loads(result.details_json)
+    assert details["llm_count_check"]["passed"] is True
+    assert details["final_output_comparison"]["actual_output"] == ""
+    assert details["final_output_comparison"]["reason"] == "Trace 中没有找到最终 LLM 输出"
+    assert result.overall_passed is False
+    assert client.prompts == []
 
 
 @pytest.mark.asyncio

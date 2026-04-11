@@ -96,6 +96,20 @@ def test_trace_ready_for_comparison_requires_final_openai_output_not_min_count()
         expected_min_llm_count=3,
     )
 
+    unfinished_spans = [
+        SimpleNamespace(span_type="llm", provider="openai", output='{"choices":[{"message":{"content":"previous text"}}]}'),
+        SimpleNamespace(
+            span_type="llm",
+            provider="openai",
+            output=(
+                '{"choices":[{"message":{"content":null,'
+                '"tool_calls":[{"function":{"name":"exec","arguments":"{}"}}]}}]}'
+            ),
+        ),
+    ]
+    assert not has_final_openai_llm_output(unfinished_spans)
+    assert not is_trace_ready_for_comparison(unfinished_spans, expected_min_llm_count=1)
+
 
 @pytest.mark.asyncio
 async def test_create_execution_generates_execution_scoped_user_session(monkeypatch):

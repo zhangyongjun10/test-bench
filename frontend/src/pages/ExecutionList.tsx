@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Button, Form, Modal, Popconfirm, Select, Space, Table, Tag, message } from 'antd'
-import { DeleteOutlined, EyeOutlined, PlusOutlined } from '@ant-design/icons'
+import { DeleteOutlined, EyeOutlined, PlusOutlined, RetweetOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { useNavigate } from 'react-router-dom'
 
-import { agentApi, executionApi, llmApi, scenarioApi } from '../api/client'
-import type { Agent, ExecutionJob, LLMModel, Scenario } from '../api/types'
+import { agentApi, executionApi, llmApi, replayApi, scenarioApi } from '../api/client'
+import type { Agent, ExecutionJob, LLMModel, ReplayBaselineSource, Scenario } from '../api/types'
 
 const STATUS_COLORS: Record<string, string> = {
   queued: 'blue',
@@ -60,7 +60,11 @@ const ExecutionList = () => {
   const [pageSize, setPageSize] = useState(10)
   const [loading, setLoading] = useState(false)
   const [modalVisible, setModalVisible] = useState(false)
+  const [replayModalVisible, setReplayModalVisible] = useState(false)
+  const [replaySubmitting, setReplaySubmitting] = useState(false)
+  const [selectedReplayExecution, setSelectedReplayExecution] = useState<ExecutionJob | null>(null)
   const [form] = Form.useForm()
+  const [replayForm] = Form.useForm()
 
   const scenarioNameMap = useMemo(
     () => Object.fromEntries(allScenarios.map(scenario => [scenario.id, scenario.name])),
@@ -168,6 +172,42 @@ const ExecutionList = () => {
     }
   }
 
+  const openReplayModal = (execution: ExecutionJob) => {
+    const defaultModelId = execution.llm_model_id || llms[0]?.id
+    setSelectedReplayExecution(execution)
+    replayForm.setFieldsValue({
+      baseline_source: 'reference_execution',
+      llm_model_id: defaultModelId,
+      idempotency_key: crypto.randomUUID(),
+    })
+    setReplayModalVisible(true)
+  }
+
+  const handleReplaySubmit = async () => {
+    if (!selectedReplayExecution) {
+      return
+    }
+    setReplaySubmitting(true)
+    try {
+      const values = await replayForm.validateFields()
+      const res = await replayApi.create({
+        original_execution_id: selectedReplayExecution.id,
+        baseline_source: values.baseline_source as ReplayBaselineSource,
+        llm_model_id: values.llm_model_id,
+        idempotency_key: values.idempotency_key,
+      })
+      message.success('链路回放任务已创建')
+      setReplayModalVisible(false)
+      navigate(`/replays/${res.data.id}`)
+    } catch (error: any) {
+      if (!error?.errorFields) {
+        message.error(error.message)
+      }
+    } finally {
+      setReplaySubmitting(false)
+    }
+  }
+
   const columns: ColumnsType<ExecutionJob> = [
     {
       title: '状态',
@@ -214,12 +254,21 @@ const ExecutionList = () => {
     {
       title: '操作',
       key: 'action',
-      width: 140,
+      width: 220,
       fixed: 'right',
       render: (_, record) => (
         <Space size="middle">
           <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => navigate(`/execution/${record.id}`)}>
             详情
+          </Button>
+          <Button
+            type="link"
+            size="small"
+            icon={<RetweetOutlined />}
+            disabled={record.status !== 'completed' && record.status !== 'completed_with_mismatch'}
+            onClick={() => openReplayModal(record)}
+          >
+            回放
           </Button>
           <Popconfirm title="确认删除这条执行记录吗？" onConfirm={() => void handleDelete(record.id)}>
             <Button type="link" size="small" danger icon={<DeleteOutlined />}>
@@ -309,6 +358,44 @@ const ExecutionList = () => {
               placeholder="选择比对模型"
               options={llms.map(model => ({ label: model.name, value: model.id }))}
             />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="链路回放"
+        open={replayModalVisible}
+        confirmLoading={replaySubmitting}
+        onOk={() => void handleReplaySubmit()}
+        onCancel={() => setReplayModalVisible(false)}
+        okText="确认回放"
+        cancelText="取消"
+      >
+        <Form form={replayForm} layout="vertical">
+          <Form.Item label="原始执行">
+            <div style={{ color: '#475569', wordBreak: 'break-all' }}>{selectedReplayExecution?.id || '-'}</div>
+          </Form.Item>
+          <Form.Item
+            name="baseline_source"
+            label="比较基准"
+            rules={[{ required: true, message: '请选择比较基准' }]}
+          >
+            <Select
+              options={[
+                { label: '和当前执行比较', value: 'reference_execution' },
+                { label: '和场景基线比较', value: 'scenario_baseline' },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item
+            name="llm_model_id"
+            label="比对模型"
+            rules={[{ required: true, message: '请选择比对模型' }]}
+          >
+            <Select options={llms.map(model => ({ label: model.name, value: model.id }))} />
+          </Form.Item>
+          <Form.Item name="idempotency_key" hidden>
+            <input />
           </Form.Item>
         </Form>
       </Modal>

@@ -6,6 +6,7 @@ import type {
   AgentUpdate,
   ClickHouseConfig,
   ClickHouseConfigUpdate,
+  CreateReplayRequest,
   CreateExecutionRequest,
   DetailedComparisonResult,
   ExecutionJob,
@@ -15,6 +16,9 @@ import type {
   LLMModel,
   LLMUpdate,
   RecompareResponse,
+  ReplayDetail,
+  ReplayHistoryData,
+  ReplayTask,
   Response,
   Scenario,
   ScenarioCreate,
@@ -89,6 +93,15 @@ export const executionApi = {
   recompare: (id: string, llm_model_id: string) =>
     asResponse<RecompareResponse>(request.post(`/v1/execution/${id}/recompare`, {}, { params: { llm_model_id } })),
   delete: (id: string) => asResponse<null>(request.delete(`/v1/execution/${id}`)),
+  getReplays: (id: string, limit?: number, offset?: number) =>
+    asResponse<ReplayHistoryData>(request.get(`/v1/execution/${id}/replays`, { params: { limit, offset } })),
+}
+
+export const replayApi = {
+  create: (data: CreateReplayRequest) => asResponse<ReplayTask>(request.post('/v1/replay', data)),
+  get: (id: string) => asResponse<ReplayDetail>(request.get(`/v1/replay/${id}`)),
+  recompare: (id: string, llm_model_id: string) =>
+    asResponse<RecompareResponse>(request.post(`/v1/replay/${id}/recompare`, {}, { params: { llm_model_id } })),
 }
 
 export const scenarioApiExtended = {

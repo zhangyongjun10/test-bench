@@ -59,6 +59,9 @@ class DetailedComparisonResponse(BaseModel):
     execution_id: UUID
     scenario_id: UUID
     llm_model_id: UUID | None = None
+    replay_task_id: UUID | None = None
+    source_type: str | None = None
+    baseline_source: str | None = None
     trace_id: str | None
     process_score: float | None  # 0-100
     result_score: float | None  # 0-100

@@ -136,6 +136,46 @@ def extract_llm_content(output: str) -> str:
     return output
 
 
+def has_tool_call_output(output: str) -> bool:
+    """Return true when an LLM output payload represents a tool call turn."""
+    if not output:
+        return False
+
+    try:
+        parsed = json.loads(output)
+    except json.JSONDecodeError:
+        return False
+
+    if not isinstance(parsed, dict):
+        return False
+
+    choices = parsed.get("choices")
+    if not isinstance(choices, list):
+        return False
+
+    for choice in choices:
+        if not isinstance(choice, dict):
+            continue
+        message = choice.get("message")
+        if isinstance(message, dict) and (message.get("tool_calls") or message.get("function_call")):
+            return True
+        delta = choice.get("delta")
+        if isinstance(delta, dict) and (delta.get("tool_calls") or delta.get("function_call")):
+            return True
+    return False
+
+
+def extract_final_llm_content(llm_spans: list[Span]) -> str:
+    """Extract final output only when the last comparable LLM span is text."""
+    if not llm_spans:
+        return ""
+
+    output = llm_spans[-1].output or ""
+    if has_tool_call_output(output):
+        return ""
+    return extract_llm_content(output).strip()
+
+
 class ComparisonService:
     """LLM-only comparison service."""
 
@@ -218,7 +258,7 @@ class ComparisonService:
         }
 
         baseline_output = (scenario.baseline_result or "").strip()
-        actual_output = extract_llm_content(llm_spans[-1].output or "").strip() if llm_spans else ""
+        actual_output = extract_final_llm_content(llm_spans)
         final_output_comparison = {
             "baseline_output": baseline_output,
             "actual_output": actual_output,
@@ -273,6 +313,108 @@ class ComparisonService:
             execution_id=execution.id,
             scenario_id=scenario.id,
             llm_model_id=llm_model.id,
+            trace_id=execution.trace_id,
+            process_score=None,
+            result_score=None,
+            overall_passed=count_passed and final_output_comparison["consistent"],
+            details_json=json.dumps(
+                {
+                    "tool_comparisons": [],
+                    "llm_comparison": None,
+                    "llm_count_check": llm_count_check,
+                    "final_output_comparison": final_output_comparison,
+                },
+                ensure_ascii=False,
+            ),
+            status=ComparisonStatus.COMPLETED,
+            error_message=error_message,
+            retry_count=0,
+            completed_at=datetime.now(UTC),
+        )
+
+    async def detailed_compare_with_baseline(
+        self,
+        *,
+        scenario: Scenario,
+        execution: ExecutionJob,
+        trace_spans: list[Span],
+        llm_model: LLMModel,
+        baseline_output: str,
+        expected_min: int,
+        expected_max: int,
+        source_type: str = "replay",
+        replay_task_id: object | None = None,
+        baseline_source: str | None = None,
+    ) -> ComparisonResultEntity:
+        """Run LLM-only comparison against an explicit frozen baseline."""
+        llm_spans = self._get_comparable_llm_spans(trace_spans)
+        actual_count = len(llm_spans)
+
+        invalid_range = expected_min < 0 or expected_max < 0 or expected_min > expected_max
+        count_passed = False if invalid_range else expected_min <= actual_count <= expected_max
+        llm_count_check = {
+            "expected_min": expected_min,
+            "expected_max": expected_max,
+            "actual_count": actual_count,
+            "passed": count_passed,
+        }
+
+        actual_output = extract_final_llm_content(llm_spans)
+        final_output_comparison = {
+            "baseline_output": (baseline_output or "").strip(),
+            "actual_output": actual_output,
+            "consistent": False,
+            "reason": "",
+            "algorithm_similarity": None,
+            "verification_mode": None,
+        }
+
+        error_message: str | None = None
+        if invalid_range:
+            error_message = "LLM 调用次数范围无效"
+            final_output_comparison["reason"] = error_message
+        elif not count_passed:
+            final_output_comparison["reason"] = (
+                f"LLM 调用次数不符合预期，实际为 {actual_count} 次，"
+                f"期望范围为 {expected_min} ~ {expected_max} 次"
+            )
+        elif not final_output_comparison["baseline_output"]:
+            final_output_comparison["reason"] = "基线输出为空"
+        elif not actual_output:
+            final_output_comparison["reason"] = "Trace 中没有找到最终 LLM 输出"
+        else:
+            similarity = calculate_algorithm_similarity(actual_output, final_output_comparison["baseline_output"])
+            final_output_comparison["algorithm_similarity"] = similarity
+            if similarity >= ALGORITHM_PASS_THRESHOLD:
+                final_output_comparison["consistent"] = True
+                final_output_comparison["verification_mode"] = "algorithm_short_circuit"
+                final_output_comparison["reason"] = (
+                    f"算法粗筛相似度为 {similarity:.3f}，达到直通阈值，已跳过 LLM 语义校验。"
+                )
+            else:
+                prompt_template = (llm_model.comparison_prompt or DEFAULT_COMPARISON_PROMPT).strip()
+                prompt = prompt_template.replace("{{baseline_result}}", final_output_comparison["baseline_output"])
+                prompt = prompt.replace("{{actual_result}}", actual_output)
+                started_at = time.time()
+                consistent, reason = await self._verify_with_llm(
+                    prompt,
+                    actual_output,
+                    final_output_comparison["baseline_output"],
+                )
+                observe_llm_compare_duration(time.time() - started_at)
+                final_output_comparison["consistent"] = consistent
+                final_output_comparison["verification_mode"] = (
+                    "llm_verification" if consistent or not reason.startswith("LLM 语义校验") else "llm_verification_error"
+                )
+                final_output_comparison["reason"] = reason
+
+        return ComparisonResultEntity(
+            execution_id=execution.id,
+            scenario_id=scenario.id,
+            llm_model_id=llm_model.id,
+            replay_task_id=replay_task_id,
+            source_type=source_type,
+            baseline_source=baseline_source,
             trace_id=execution.trace_id,
             process_score=None,
             result_score=None,

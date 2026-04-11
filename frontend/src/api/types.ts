@@ -83,6 +83,9 @@ export interface ExecutionJob {
   scenario_id: string
   llm_model_id?: string
   user_session?: string
+  run_source?: string
+  parent_execution_id?: string | null
+  request_snapshot_json?: string | null
   trace_id?: string
   status: string
   comparison_score?: number
@@ -190,6 +193,9 @@ export interface DetailedComparisonResult {
   execution_id: string
   scenario_id: string
   llm_model_id?: string | null
+  replay_task_id?: string | null
+  source_type?: string | null
+  baseline_source?: string | null
   trace_id: string
   process_score: number | null  // 0-100
   result_score: number | null  // 0-100
@@ -209,6 +215,47 @@ export interface DetailedComparisonResult {
 export interface RecompareResponse {
   success: boolean
   message: string
+}
+
+export type ReplayBaselineSource = 'scenario_baseline' | 'reference_execution'
+
+export interface CreateReplayRequest {
+  original_execution_id: string
+  baseline_source: ReplayBaselineSource
+  llm_model_id: string
+  idempotency_key: string
+}
+
+export interface ReplayTask {
+  id: string
+  original_execution_id: string
+  replay_execution_id: string
+  scenario_id: string
+  agent_id: string
+  baseline_source: ReplayBaselineSource
+  baseline_snapshot_json: string
+  idempotency_key: string
+  llm_model_id: string
+  status: string
+  comparison_id?: string | null
+  overall_passed?: boolean | null
+  error_message?: string | null
+  created_at: string
+  updated_at: string
+  started_at?: string | null
+  completed_at?: string | null
+}
+
+export interface ReplayDetail {
+  replay_task: ReplayTask
+  original_execution: ExecutionJob
+  replay_execution: ExecutionJob
+  comparison?: DetailedComparisonResult | null
+}
+
+export interface ReplayHistoryData {
+  total: number
+  items: ReplayTask[]
 }
 
 export interface SetBaselineRequest {

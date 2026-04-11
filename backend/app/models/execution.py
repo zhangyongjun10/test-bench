@@ -21,6 +21,9 @@ class ExecutionResponse(BaseModel):
     scenario_id: UUID | None
     llm_model_id: UUID | None
     user_session: str | None
+    run_source: str | None = None
+    parent_execution_id: UUID | None = None
+    request_snapshot_json: str | None = None
     trace_id: str | None
     status: str
     comparison_score: float | None

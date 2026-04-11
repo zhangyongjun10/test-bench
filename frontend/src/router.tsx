@@ -5,6 +5,7 @@ import LLMList from './pages/LLMList'
 import ScenarioList from './pages/ScenarioList'
 import ExecutionList from './pages/ExecutionList'
 import ExecutionDetail from './pages/ExecutionDetail'
+import ReplayDetail from './pages/ReplayDetail'
 import SystemConfig from './pages/SystemConfig'
 
 export const routes = createRoutesFromElements(
@@ -15,6 +16,7 @@ export const routes = createRoutesFromElements(
     <Route path="scenarios" element={<ScenarioList />} />
     <Route path="executions" element={<ExecutionList />} />
     <Route path="execution/:id" element={<ExecutionDetail />} />
+    <Route path="replays/:replayTaskId" element={<ReplayDetail />} />
     <Route path="system" element={<SystemConfig />} />
   </Route>
 )

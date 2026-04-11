@@ -17,8 +17,8 @@ from app.core.db import AsyncSessionLocal
 from app.core.encryption import encryption_service
 from app.core.logger import logger
 from app.core.metrics import increment_executions_total, observe_execution_duration
-from app.domain.entities.comparison import ComparisonResult, ComparisonStatus
-from app.domain.entities.execution import ExecutionJob, ExecutionStatus
+from app.domain.entities.comparison import ComparisonResult, ComparisonSourceType, ComparisonStatus
+from app.domain.entities.execution import ExecutionJob, ExecutionRunSource, ExecutionStatus
 from app.domain.repositories.agent_repo import SQLAlchemyAgentRepository
 from app.domain.repositories.comparison_repo import SQLAlchemyComparisonRepository
 from app.domain.repositories.execution_repo import (
@@ -32,16 +32,7 @@ from app.services.llm_service import LLMService
 
 def has_comparable_llm_output(spans: list) -> bool:
     """Return true when trace has an OpenAI LLM span with extractable output."""
-    from app.services.comparison import extract_llm_content
-
-    for span in spans:
-        if (getattr(span, "span_type", "") or "").lower() != "llm":
-            continue
-        if (getattr(span, "provider", "") or "").lower() != "openai":
-            continue
-        if extract_llm_content(getattr(span, "output", "") or "").strip():
-            return True
-    return False
+    return has_final_openai_llm_output(spans)
 
 
 def has_tool_call_output(output: str) -> bool:
@@ -74,18 +65,20 @@ def has_tool_call_output(output: str) -> bool:
 
 
 def has_final_openai_llm_output(spans: list) -> bool:
-    """Return true when an OpenAI LLM span has final assistant text, not a tool call turn."""
+    """Return true when the last OpenAI LLM span is final assistant text."""
     from app.services.comparison import extract_llm_content
 
-    for span in spans:
-        if (getattr(span, "span_type", "") or "").lower() != "llm":
-            continue
-        if (getattr(span, "provider", "") or "").lower() != "openai":
-            continue
-        output = getattr(span, "output", "") or ""
-        if extract_llm_content(output).strip() and not has_tool_call_output(output):
-            return True
-    return False
+    llm_spans = [
+        span
+        for span in spans
+        if (getattr(span, "span_type", "") or "").lower() == "llm"
+        and (getattr(span, "provider", "") or "").lower() == "openai"
+    ]
+    if not llm_spans:
+        return False
+
+    output = getattr(llm_spans[-1], "output", "") or ""
+    return bool(extract_llm_content(output).strip()) and not has_tool_call_output(output)
 
 
 def count_openai_llm_spans(spans: list) -> int:
@@ -137,6 +130,7 @@ class ExecutionService:
             scenario_id=request.scenario_id,
             llm_model_id=request.llm_model_id,
             user_session=f"exec_{execution_id.hex}",
+            run_source=ExecutionRunSource.NORMAL,
             trace_id=str(uuid.uuid4()),
             status=ExecutionStatus.QUEUED,
         )
@@ -146,7 +140,7 @@ class ExecutionService:
         background_tasks.add_task(_run_execution_background, result.id)
         return result.id
 
-    async def run_execution(self, execution_id: UUID) -> None:
+    async def run_execution(self, execution_id: UUID, *, auto_compare: bool = True) -> None:
         """Execute the full replay flow in the background."""
         from app.services.comparison import ComparisonService
         from app.services.metric_extractor import MetricExtractor
@@ -227,7 +221,7 @@ class ExecutionService:
 
             if not spans:
                 logger.warning("No spans found for trace %s after retries", execution.trace_id)
-            elif scenario.compare_enabled and not is_trace_ready_for_comparison(spans, expected_min_llm_count):
+            elif auto_compare and scenario.compare_enabled and not is_trace_ready_for_comparison(spans, expected_min_llm_count):
                 logger.warning(
                     "Trace %s is not fully ready for comparison after retries",
                     execution.trace_id,
@@ -238,11 +232,12 @@ class ExecutionService:
             extractor.extract(spans)
             logger.info("Metrics extracted for execution %s", execution_id)
 
-            execution.status = ExecutionStatus.COMPARING
-            await self.repo.update(execution)
+            if auto_compare:
+                execution.status = ExecutionStatus.COMPARING
+                await self.repo.update(execution)
 
             overall_passed: Optional[bool] = None
-            if scenario.compare_enabled:
+            if auto_compare and scenario.compare_enabled:
                 llm_service = LLMService(self.session)
                 llm_model = await llm_service.get_llm(execution.llm_model_id)
                 if not llm_model:
@@ -261,6 +256,7 @@ class ExecutionService:
                         trace_spans=spans,
                         llm_model=llm_model,
                     )
+                    comparison_result.source_type = ComparisonSourceType.EXECUTION_AUTO
                     await comparison_repo.create(self.session, comparison_result)
                     execution.comparison_score = None
                     execution.comparison_passed = comparison_result.overall_passed
@@ -284,6 +280,7 @@ class ExecutionService:
                             scenario_id=scenario.id,
                             llm_model_id=execution.llm_model_id,
                             trace_id=execution.trace_id,
+                            source_type=ComparisonSourceType.EXECUTION_AUTO,
                             process_score=None,
                             result_score=None,
                             overall_passed=False,

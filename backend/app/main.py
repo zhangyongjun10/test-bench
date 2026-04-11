@@ -10,6 +10,8 @@ from app.api.agent import router as agent_router
 from app.api.llm import router as llm_router
 from app.api.scenario import router as scenario_router
 from app.api.execution import router as execution_router
+from app.api.replay import history_router as replay_history_router
+from app.api.replay import router as replay_router
 from app.api.system import router as system_router
 from app.middleware.logging import logging_middleware
 from app.middleware.error_handler import validation_exception_handler
@@ -54,6 +56,8 @@ app.include_router(agent_router)
 app.include_router(llm_router)
 app.include_router(scenario_router)
 app.include_router(execution_router)
+app.include_router(replay_router)
+app.include_router(replay_history_router)
 app.include_router(system_router)
 
 
