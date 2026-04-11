@@ -58,7 +58,8 @@ test-bench/
 | [`agent.py`](backend/app/api/agent.py) | Agent 管理接口：增删改查 Agent 配置 |
 | [`llm.py`](backend/app/api/llm.py) | LLM 模型管理接口：增删改查 + **测试连接**端点 `/api/v1/llm/{id}/test` |
 | [`scenario.py`](backend/app/api/scenario.py) | 测试场景管理接口：增删改查测试场景 |
-| [`execution.py`](backend/app/api/execution.py) | 测试执行记录接口：列表查询、详情查询 |
+| [`execution.py`](backend/app/api/execution.py) | 测试执行记录接口：列表查询、详情查询、比对历史查询 |
+| [`replay.py`](backend/app/api/replay.py) | **端到端回放接口**：创建回放任务、查询回放详情、重新比对 |
 | [`system.py`](backend/app/api/system.py) | 系统配置管理接口 |
 | [`__init__.py`](backend/app/api/__init__.py) | API 路由聚合，注册到 FastAPI |
 
@@ -109,6 +110,8 @@ test-bench/
 | [`execution.py`](backend/app/domain/entities/execution.py) | 执行记录实体：保存每次测试执行的结果。|
 | [`system.py`](backend/app/domain/entities/system.py) | 系统配置实体：存储 ClickHouse 连接配置等。|
 | [`trace.py`](backend/app/domain/entities/trace.py) | Trace 实体：Opik/Langfuse 追踪数据。|
+| [`comparison.py`](backend/app/domain/entities/comparison.py) | 比对结果实体：保存每次 LLM 比对的结果，支持同一次执行多次比对历史。|
+| [`replay.py`](backend/app/domain/entities/replay.py) | **回放任务实体**：保存端到端回放任务状态、基线快照、比对结果。|
 
 这些是 SQLAlchemy ORM 实体，映射到数据库表。
 
@@ -120,6 +123,8 @@ test-bench/
 | [`llm_repo.py`](backend/app/domain/repositories/llm_repo.py) | LLM 模型数据访问。|
 | [`scenario_repo.py`](backend/app/domain/repositories/scenario_repo.py) | 测试场景数据访问。|
 | [`execution_repo.py`](backend/app/domain/repositories/execution_repo.py) | 执行记录数据访问，支持分页查询。|
+| [`comparison_repo.py`](backend/app/domain/repositories/comparison_repo.py) | 比对结果数据访问，支持查询多次比对历史。|
+| [`replay_repo.py`](backend/app/domain/repositories/replay_repo.py) | **回放任务数据访问**：CRUD 操作、幂等性查询、队列抢占。|
 
 **职责**：封装所有数据库查询操作，业务层通过仓储访问数据，解耦业务逻辑与数据访问细节。
 
@@ -143,6 +148,8 @@ test-bench/
 | [`scenario.py`](backend/app/models/scenario.py) | 场景 CRUD 请求响应模型。|
 | [`execution.py`](backend/app/models/execution.py) | 执行查询、详情响应模型。|
 | [`system.py`](backend/app/models/system.py) | 系统配置请求响应模型。|
+| [`comparison.py`](backend/app/models/comparison.py) | 比对结果请求响应模型。|
+| [`replay.py`](backend/app/models/replay.py) | **回放任务请求响应模型**：创建回放任务、回放详情响应。|
 | [`common.py`](backend/app/models/common.py) | 通用分页响应、统一 API 响应格式。|
 
 这一层是 FastAPI 请求验证使用，所有入参出参都通过 Pydantic 校验。
@@ -159,7 +166,8 @@ test-bench/
 | [`llm_service.py`](backend/app/services/llm_service) | LLM 业务逻辑：创建、更新、删除、解密 API Key、获取客户端实例。|
 | [`scenario_service.py`](backend/app/services/scenario_service.py) | 场景业务逻辑：CRUD。|
 | [`execution_service.py`](backend/app/services/execution_service.py) | **核心执行逻辑**：触发一次测试执行，调用 Agent，获取输出，调用 LLM 比对，保存结果。|
-| [`comparison.py`](backend/app/services/comparison.py) | **比对服务**：构造比对 prompt，调用 LLM 进行输出比对。|
+| [`replay_service.py`](backend/app/services/replay_service.py) | **端到端回放服务**：创建回放任务，后台重新执行 Agent，比对新输出与基线。支持两种基线：场景基线、原始执行输出。|
+| [`comparison.py`](backend/app/services/comparison.py) | **比对服务**：构造比对 prompt，调用 LLM 进行输出比对。支持多次比对历史记录。|
 | [`trace_fetcher.py`](backend/app/services/trace_fetcher.py) | **Trace 拉取服务**：从 ClickHouse 拉取 Opik/Langfuse Trace 数据。|
 | [`metric_extractor.py`](backend/app/services/metric_extractor.py) | **指标提取服务**：从 Trace 中提取指标（输入 tokens、输出 tokens、延迟等）。|
 
@@ -225,7 +233,8 @@ execution_service.start_execution
 | [`LLMList.tsx`](frontend/src/pages/LLMList.tsx) | **LLM 模型管理列表页面**，在这里添加/编辑/测试 LLM 连接（包括 GLM-4.7）。|
 | [`ScenarioList.tsx`](frontend/src/pages/ScenarioList.tsx) | 测试场景列表页面。|
 | [`ExecutionList.tsx`](frontend/src/pages/ExecutionList.tsx) | 执行记录列表页面。|
-| [`ExecutionDetail.tsx`](frontend/src/pages/ExecutionDetail.tsx) | **执行详情页面**，展示比对结果、提取的指标、Trace 信息。|
+| [`ExecutionDetail.tsx`](frontend/src/pages/ExecutionDetail.tsx) | **执行详情页面**，展示比对结果、提取的指标、Trace 信息。支持查看多次比对历史。|
+| [`ReplayDetail.tsx`](frontend/src/pages/ReplayDetail.tsx) | **回放详情页面**，展示回放任务状态、基线信息、比对结果。支持场景基线单 Trace 展示、原始执行基准双 Trace 对比展示。|
 | [`SystemConfig.tsx`](frontend/src/pages/SystemConfig.tsx) | 系统配置页面（ClickHouse 连接配置）。|
 
 ---
@@ -312,6 +321,38 @@ execution_service.start_execution
 
 ---
 
+### 端到端重放流程
+
+```
+用户在原始执行页点击"重放"
+  ↓
+POST /api/v1/replay/create → api/replay.py
+  ↓
+replay_service.create_replay_task
+  ├─ 校验原始执行状态，获取 Agent/场景/LLM 模型
+  ├─ 构建基线快照
+  │   ├─ 场景基线：使用场景预设基线输出和 LLM 次数范围
+  │   └─ 原始执行基准：从原始执行 Trace 提取最终输出和 LLM 次数
+  ├─ 创建 ReplayTask 和新的 ExecutionJob（独立 user_session，避免复用历史上下文）
+  └─ 后台任务执行 → run_replay_background
+  ↓
+后台运行 replay_service.run_replay
+  ├─ 重新调用一次被测 Agent（全新会话）
+  ├─ 等待 Trace 落库，直到最终 OpenAI LLM 文本输出出现
+  ├─ 调用 comparison_service.detailed_compare_with_baseline
+  │   └─ 比对新执行输出与基线输出
+  └─ 更新回放任务状态为完成
+  ↓
+前端轮询状态，完成后展示比对结果和双 Trace 对比
+```
+
+**核心设计点：**
+- 每次回放创建**独立全新会话**，不会复用历史执行的上下文
+- 支持两种比对基线来源：场景基线、原始执行输出基线
+- 基线会冻结原始输出和 LLM 调用次数预期，保证比对公平性
+
+---
+
 ## 关键配置说明
 
 | 配置项 | 位置 | 说明 |
@@ -350,6 +391,9 @@ execution_service.start_execution
 | GLM-4.7 连接测试 | [`backend/app/clients/llm_client.py:51-63`](backend/app/clients/llm_client.py#L51-L63) |
 | LLM 实际调用 | [`backend/app/clients/llm_client.py:65-118`](backend/app/clients/llm_client.py#L65-L118) |
 | 测试执行入口 | [`backend/app/services/execution_service.py`](backend/app/services/execution_service.py) |
+| **端到端回放核心** | [`backend/app/services/replay_service.py`](backend/app/services/replay_service.py) |
 | LLM 比对逻辑 | [`backend/app/services/comparison.py`](backend/app/services/comparison.py) |
+| **回放详情页** | [`frontend/src/pages/ReplayDetail.tsx`](frontend/src/pages/ReplayDetail.tsx) |
 | 前端 LLM 管理页 | [`frontend/src/pages/LLMList.tsx`](frontend/src/pages/LLMList.tsx) |
+| 执行详情页 | [`frontend/src/pages/ExecutionDetail.tsx`](frontend/src/pages/ExecutionDetail.tsx) |
 | 后端 API 入口 | [`backend/app/main.py`](backend/app/main.py) |
