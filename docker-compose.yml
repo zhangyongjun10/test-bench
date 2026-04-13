@@ -18,7 +18,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     ports:
-      - "8000:8000"
+      - "8010:8000"
     environment:
       - DATABASE_URL=postgresql+asyncpg://postgres:Introcks1234@192.168.12.179:5432/testbench
     env_file:
