@@ -23,8 +23,8 @@ services:
       - DATABASE_URL=postgresql+asyncpg://postgres:Introcks1234@192.168.12.179:5432/testbench
     env_file:
       - ./backend/.env
-    depends_on:
-      - postgres
+    # depends_on:
+    #   - postgres
     volumes:
       - ./logs:/app/logs
     restart: unless-stopped
