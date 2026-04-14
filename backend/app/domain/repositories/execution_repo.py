@@ -47,6 +47,10 @@ class ExecutionRepository(ABC):
     async def delete_old_data(self, days: int = 30) -> int:
         """Delete executions older than the retention threshold."""
 
+    @abstractmethod
+    async def get_by_batch_id(self, batch_id: str) -> List[ExecutionJob]:
+        """List executions for a batch id."""
+
 
 class SQLAlchemyExecutionRepository(ExecutionRepository):
     def __init__(self, session: AsyncSession):
@@ -145,3 +149,9 @@ class SQLAlchemyExecutionRepository(ExecutionRepository):
         result = await self.session.execute(stmt)
         await self.session.commit()
         return result.rowcount or 0
+
+    async def get_by_batch_id(self, batch_id: str) -> List[ExecutionJob]:
+        result = await self.session.execute(
+            select(ExecutionJob).where(ExecutionJob.batch_id == batch_id).order_by(ExecutionJob.created_at)
+        )
+        return list(result.scalars().all())

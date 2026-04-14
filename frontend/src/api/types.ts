@@ -19,6 +19,7 @@ export interface AgentCreate {
   description?: string
   base_url: string
   api_key: string
+  user_session?: string
 }
 
 export interface AgentUpdate extends Partial<AgentCreate> {}
@@ -102,7 +103,17 @@ export interface ExecutionJob {
 export interface CreateExecutionRequest {
   agent_id: string
   scenario_id: string
-  llm_model_id: string
+  llm_model_id?: string
+}
+
+export interface CreateConcurrentExecutionRequest {
+  input: string
+  concurrency: number
+  model: string
+  scenario_id?: string
+  concurrent_mode?: 'single_instance' | 'multi_instance'
+  llm_model_id?: string
+  agent_id?: string
 }
 
 export interface Span {
@@ -149,15 +160,14 @@ export interface TestResponse {
   message: string
 }
 
-// 比对结果相关类型
 export interface SingleToolComparison {
   tool_name: string
   baseline_input: string
   baseline_output: string
   actual_input: string
   actual_output: string
-  similarity: number  // 0-1
-  score: number      // 0-1
+  similarity: number
+  score: number
   consistent: boolean
   reason: string
   matched: boolean
@@ -166,8 +176,8 @@ export interface SingleToolComparison {
 export interface SingleLLMComparison {
   baseline_output: string
   actual_output: string
-  similarity: number  // 0-1
-  score: number      // 0-1
+  similarity: number
+  score: number
   consistent: boolean
   reason: string
 }
@@ -197,14 +207,14 @@ export interface DetailedComparisonResult {
   source_type?: string | null
   baseline_source?: string | null
   trace_id: string
-  process_score: number | null  // 0-100
-  result_score: number | null  // 0-100
+  process_score: number | null
+  result_score: number | null
   overall_passed: boolean | null
   tool_comparisons: SingleToolComparison[]
   llm_comparison: SingleLLMComparison | null
   llm_count_check: LLMCountCheck | null
   final_output_comparison: FinalOutputComparison | null
-  status: string  // pending/processing/completed/failed
+  status: string
   error_message: string | null
   retry_count: number
   created_at: string

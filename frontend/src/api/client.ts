@@ -6,8 +6,9 @@ import type {
   AgentUpdate,
   ClickHouseConfig,
   ClickHouseConfigUpdate,
-  CreateReplayRequest,
+  CreateConcurrentExecutionRequest,
   CreateExecutionRequest,
+  CreateReplayRequest,
   DetailedComparisonResult,
   ExecutionJob,
   ExecutionListData,
@@ -78,6 +79,8 @@ export const scenarioApi = {
 
 export const executionApi = {
   create: (data: CreateExecutionRequest) => asResponse<string>(request.post('/v1/execution', data)),
+  createConcurrent: (data: CreateConcurrentExecutionRequest) =>
+    asResponse<{ batch_id: string; message: string }>(request.post('/v1/execution/concurrent', data)),
   list: (agentId?: string, scenarioId?: string, limit?: number, offset?: number) =>
     asResponse<ExecutionListData>(
       request.get('/v1/execution', {
@@ -95,6 +98,8 @@ export const executionApi = {
   delete: (id: string) => asResponse<null>(request.delete(`/v1/execution/${id}`)),
   getReplays: (id: string, limit?: number, offset?: number) =>
     asResponse<ReplayHistoryData>(request.get(`/v1/execution/${id}/replays`, { params: { limit, offset } })),
+  getConcurrentStatus: (batchId: string) =>
+    asResponse<Record<string, unknown>>(request.get(`/v1/execution/concurrent/${batchId}`)),
 }
 
 export const replayApi = {

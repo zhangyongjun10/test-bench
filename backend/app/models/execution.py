@@ -1,20 +1,21 @@
-"""执行模型"""
+"""鎵ц妯″瀷"""
 
-from uuid import UUID
 from datetime import datetime
-from pydantic import BaseModel, ConfigDict
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class CreateExecutionRequest(BaseModel):
-    """创建执行请求"""
+    """鍒涘缓鎵ц璇锋眰"""
 
     agent_id: UUID
     scenario_id: UUID
-    llm_model_id: UUID
+    llm_model_id: UUID | None = None
 
 
 class ExecutionResponse(BaseModel):
-    """执行响应"""
+    """鎵ц鍝嶅簲"""
 
     id: UUID
     agent_id: UUID | None
@@ -40,7 +41,7 @@ class ExecutionResponse(BaseModel):
 
 
 class SpanResponse(BaseModel):
-    """Span 响应（用于回放）"""
+    """Span 鍝嶅簲锛堢敤浜庡洖鏀撅級"""
 
     span_id: str
     span_type: str
@@ -56,15 +57,30 @@ class SpanResponse(BaseModel):
 
 
 class ExecutionTraceResponse(BaseModel):
-    """执行 Trace 响应"""
+    """鎵ц Trace 鍝嶅簲"""
 
     trace_id: str
     spans: list[SpanResponse]
 
 
 class ComparisonResult(BaseModel):
-    """比对结果"""
+    """姣斿缁撴灉"""
 
     score: float
     passed: bool
     reason: str
+
+
+class ConcurrentExecutionRequest(BaseModel):
+    input: str = Field(..., min_length=1)
+    concurrency: int = Field(..., ge=1)
+    model: str = Field(..., min_length=1)
+    scenario_id: UUID | None = None
+    concurrent_mode: str | None = "single_instance"
+    llm_model_id: UUID | None = None
+    agent_id: UUID | None = None
+
+
+class ConcurrentExecutionResponse(BaseModel):
+    batch_id: str
+    message: str
