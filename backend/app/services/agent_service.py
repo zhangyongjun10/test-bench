@@ -76,13 +76,15 @@ class AgentService:
         api_key = encryption_service.decrypt(agent.api_key_encrypted)
         client = HTTPAgentClient(agent.base_url, api_key, user_session=agent.user_session)
         try:
-            result = await client.test_connection()
-            if result:
+            success, test_message = await client.test_connection()
+            if success:
                 logger.info(f"Agent connection test succeeded: {agent_id}")
-                return True, "Connection successful"
-            else:
-                logger.warning(f"Agent connection test failed: {agent_id}")
-                return False, "Connection failed"
+                return True, test_message
+
+            message = test_message.strip() if test_message else "Connection failed with empty diagnostic message"
+            logger.warning(f"Agent connection test failed: {agent_id} message={message}")
+            return False, message
         except Exception as e:
-            logger.error(f"Agent connection test error: {agent_id} error={e}")
-            return False, f"Connection error: {str(e)}"
+            error_message = str(e).strip() or e.__class__.__name__
+            logger.error(f"Agent connection test error: {agent_id} error={error_message}")
+            return False, f"Connection error: {error_message}"

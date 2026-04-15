@@ -5,6 +5,7 @@ import pytest
 from fastapi import BackgroundTasks
 
 from app.clients.http_agent_client import HTTPAgentClient
+from app.clients.http_agent_client import _format_exception_message
 from app.models.execution import CreateExecutionRequest
 from app.services import execution_service as execution_service_module
 from app.services.execution_service import (
@@ -29,6 +30,12 @@ def test_http_agent_client_builds_openclaw_payload_with_user():
         "messages": [{"role": "user", "content": "hello"}],
         "user": "exec_abc",
     }
+
+
+# 验证空字符串异常也能格式化出异常类型，避免测试链接失败原因为空。
+def test_http_agent_client_formats_empty_exception_message():
+    assert _format_exception_message(TimeoutError()) == "TimeoutError"
+    assert _format_exception_message(ValueError("bad url")) == "ValueError: bad url"
 
 
 def test_has_comparable_llm_output_requires_openai_output():

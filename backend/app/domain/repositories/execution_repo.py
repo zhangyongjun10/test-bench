@@ -5,11 +5,12 @@ from datetime import UTC, datetime, timedelta
 from typing import List, Optional
 from uuid import UUID
 
-from sqlalchemy import delete, desc, select
+from sqlalchemy import delete, desc, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.entities.comparison import ComparisonResult
 from app.domain.entities.execution import ExecutionJob, ExecutionRunSource
+from app.domain.entities.replay import ReplayTask
 
 
 class ExecutionRepository(ABC):
@@ -57,6 +58,52 @@ class SQLAlchemyExecutionRepository(ExecutionRepository):
         result = await self.session.execute(stmt)
         return result.rowcount or 0
 
+    # 收集目标执行下的所有回放子执行，删除父执行前必须先清理这些外键引用。
+    async def _collect_child_execution_ids(self, execution_id: UUID) -> list[UUID]:
+        """Collect replay executions that reference the target execution."""
+        collected: list[UUID] = []
+        pending = [execution_id]
+        while pending:
+            parent_id = pending.pop(0)
+            result = await self.session.execute(
+                select(ExecutionJob.id).where(ExecutionJob.parent_execution_id == parent_id)
+            )
+            child_ids = list(result.scalars().all())
+            for child_id in child_ids:
+                if child_id not in collected:
+                    collected.append(child_id)
+                    pending.append(child_id)
+        return collected
+
+    # 删除执行及其子执行关联的回放任务和比对结果，避免父执行删除时触发外键约束。
+    async def _delete_replay_dependencies_for_executions(self, execution_ids: list[UUID]) -> int:
+        if not execution_ids:
+            return 0
+
+        replay_task_result = await self.session.execute(
+            select(ReplayTask.id).where(
+                ReplayTask.original_execution_id.in_(execution_ids)
+                | ReplayTask.replay_execution_id.in_(execution_ids)
+            )
+        )
+        replay_task_ids = list(replay_task_result.scalars().all())
+        if not replay_task_ids:
+            return 0
+
+        await self.session.execute(
+            update(ReplayTask)
+            .where(ReplayTask.id.in_(replay_task_ids))
+            .values(comparison_id=None)
+        )
+        await self.session.execute(
+            delete(ComparisonResult).where(
+                ComparisonResult.replay_task_id.in_(replay_task_ids)
+                | ComparisonResult.execution_id.in_(execution_ids)
+            )
+        )
+        result = await self.session.execute(delete(ReplayTask).where(ReplayTask.id.in_(replay_task_ids)))
+        return result.rowcount or 0
+
     async def _delete_comparisons_for_old_executions(self, cutoff: datetime) -> int:
         old_execution_ids = (
             select(ExecutionJob.id)
@@ -82,7 +129,12 @@ class SQLAlchemyExecutionRepository(ExecutionRepository):
     async def delete(self, execution_id: UUID) -> None:
         execution = await self.get_by_id(execution_id)
         if execution:
+            child_execution_ids = await self._collect_child_execution_ids(execution_id)
+            execution_ids = [execution_id, *child_execution_ids]
+            await self._delete_replay_dependencies_for_executions(execution_ids)
             await self._delete_comparisons_for_execution(execution_id)
+            if child_execution_ids:
+                await self.session.execute(delete(ExecutionJob).where(ExecutionJob.id.in_(child_execution_ids)))
             await self.session.delete(execution)
             await self.session.commit()
 
@@ -140,8 +192,14 @@ class SQLAlchemyExecutionRepository(ExecutionRepository):
 
     async def delete_old_data(self, days: int = 30) -> int:
         cutoff = datetime.now(UTC) - timedelta(days=days)
-        await self._delete_comparisons_for_old_executions(cutoff)
-        stmt = delete(ExecutionJob).where(ExecutionJob.created_at < cutoff)
-        result = await self.session.execute(stmt)
-        await self.session.commit()
-        return result.rowcount or 0
+        result = await self.session.execute(
+            select(ExecutionJob.id).where(ExecutionJob.created_at < cutoff)
+        )
+        execution_ids = list(result.scalars().all())
+
+        deleted = 0
+        for execution_id in execution_ids:
+            if await self.get_by_id(execution_id):
+                await self.delete(execution_id)
+                deleted += 1
+        return deleted

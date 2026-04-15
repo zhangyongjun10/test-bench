@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     data_retention_days: int = 30
 
     # Agent 调用超时
-    agent_timeout_seconds: int = 300
+    agent_timeout_seconds: int = 1200
 
     model_config = {
         "env_file": ".env",

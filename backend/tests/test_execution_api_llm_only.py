@@ -498,36 +498,94 @@ async def test_delete_execution_removes_comparisons_before_execution(monkeypatch
     assert deleted_execution_ids == [execution_id]
 
 
+# 验证删除父执行时会先清理回放子执行、回放任务和比对结果，避免外键约束失败。
+@pytest.mark.asyncio
+async def test_execution_repo_delete_removes_replay_dependencies_before_parent_execution():
+    execution_id = uuid.uuid4()
+    child_execution_id = uuid.uuid4()
+    execution = SimpleNamespace(id=execution_id)
+    calls: list[tuple[str, object]] = []
+
+    class FakeSession:
+        async def execute(self, stmt):
+            calls.append(("execute", stmt))
+
+            class FakeResult:
+                rowcount = 1
+
+            return FakeResult()
+
+        async def delete(self, target):
+            calls.append(("delete", target))
+
+        async def commit(self):
+            calls.append(("commit", None))
+
+    repo = execution_repo_module.SQLAlchemyExecutionRepository(FakeSession())
+
+    async def fake_get_by_id(target_execution_id):
+        assert target_execution_id == execution_id
+        calls.append(("get_by_id", target_execution_id))
+        return execution
+
+    async def fake_collect_child_execution_ids(target_execution_id):
+        assert target_execution_id == execution_id
+        calls.append(("collect_children", target_execution_id))
+        return [child_execution_id]
+
+    async def fake_delete_replay_dependencies(execution_ids):
+        assert execution_ids == [execution_id, child_execution_id]
+        calls.append(("delete_replay_dependencies", execution_ids))
+        return 1
+
+    async def fake_delete_comparisons_for_execution(target_execution_id):
+        assert target_execution_id == execution_id
+        calls.append(("delete_comparisons", target_execution_id))
+        return 1
+
+    repo.get_by_id = fake_get_by_id
+    repo._collect_child_execution_ids = fake_collect_child_execution_ids
+    repo._delete_replay_dependencies_for_executions = fake_delete_replay_dependencies
+    repo._delete_comparisons_for_execution = fake_delete_comparisons_for_execution
+
+    await repo.delete(execution_id)
+
+    call_names = [name for name, _ in calls]
+    assert call_names.index("delete_replay_dependencies") < call_names.index("delete")
+    assert call_names.index("delete_comparisons") < call_names.index("delete")
+    assert calls[-1] == ("commit", None)
+
+
+# 验证按保留期清理旧执行时复用单条删除逻辑，确保回放依赖也会被一并清理。
 @pytest.mark.asyncio
 async def test_execution_repo_delete_old_data_removes_comparisons_first():
-    statements: list[object] = []
+    deleted_execution_ids: list[uuid.UUID] = []
+    old_execution_id = uuid.uuid4()
 
     class FakeResult:
-        def __init__(self, rowcount=0):
-            self.rowcount = rowcount
-
         def scalars(self):
             return self
 
         def all(self):
-            return []
+            return [old_execution_id]
 
     class FakeSession:
-        def __init__(self):
-            self.commit_count = 0
-
         async def execute(self, stmt):
-            statements.append(stmt)
-            return FakeResult(rowcount=3)
-
-        async def commit(self):
-            self.commit_count += 1
+            assert "SELECT execution_jobs.id" in str(stmt)
+            return FakeResult()
 
     repo = execution_repo_module.SQLAlchemyExecutionRepository(FakeSession())
+
+    async def fake_get_by_id(execution_id):
+        return SimpleNamespace(id=execution_id) if execution_id == old_execution_id else None
+
+    async def fake_delete(execution_id):
+        deleted_execution_ids.append(execution_id)
+
+    repo.get_by_id = fake_get_by_id
+    repo.delete = fake_delete
+
     deleted = await repo.delete_old_data(days=30)
 
-    assert deleted == 3
-    assert len(statements) == 2
-    assert "DELETE FROM comparison_results" in str(statements[0])
-    assert "DELETE FROM execution_jobs" in str(statements[1])
-    assert repo.session.commit_count == 1
+    assert deleted == 1
+    assert deleted_execution_ids == [old_execution_id]
