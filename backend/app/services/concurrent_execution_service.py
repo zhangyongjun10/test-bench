@@ -39,7 +39,7 @@ class ConcurrentExecutionService:
     DEFERRED_COMPARISON_RETRIES = 12
     DEFERRED_COMPARISON_RETRY_INTERVAL_SECONDS = 5.0
 
-    # 初始化并发执行服务，所有并发请求统一按多路独立 execution 执行。
+    # 初始化并发执行服务，所有并发请求统一按多路独立 execution、独立 session 执行。
     def __init__(self, session: AsyncSession):
         self.session = session
         self.repo: ExecutionRepository = SQLAlchemyExecutionRepository(session)
@@ -55,7 +55,7 @@ class ConcurrentExecutionService:
             verify_ssl=False,
         )
 
-    # 创建并发执行批次并注册后台任务，前端只需传入并发数和比对模型。
+    # 创建并发执行批次并注册后台任务，Agent 请求模型由服务层固定，前端选择的模型只用于比对。
     async def create_concurrent_execution(
         self,
         input_text: str,
@@ -86,7 +86,7 @@ class ConcurrentExecutionService:
         )
         return batch_id
 
-    # 后台运行并发执行批次，为每一路并发创建独立 execution、user_session 和 trace_id。
+    # 后台运行并发执行批次，为每一路并发创建独立客户端、数据库 Session、execution 和 user_session。
     async def run_concurrent_execution(
         self,
         batch_id: str,
@@ -108,7 +108,7 @@ class ConcurrentExecutionService:
             except Exception as exc:
                 logger.error("Concurrent execution failed: %s error=%s", batch_id, exc, exc_info=True)
 
-    # 统一执行并发调用，每一路独立创建客户端和数据库 Session，避免共享状态造成串扰。
+    # 统一执行并发调用，每一路都独立创建 HTTP 客户端，避免共享客户端状态影响 trace 或 user_session。
     async def _run_concurrent_calls(
         self,
         batch_id: str,
