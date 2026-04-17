@@ -74,7 +74,7 @@ class HTTPAgentClient:
         request_url = self._build_request_url()
         effective_user_session = user_session if user_session is not None else (self.user_session or f"test_{uuid.uuid4().hex}")
         try:
-            async with httpx.AsyncClient(timeout=10.0, verify=self.verify_ssl) as client:
+            async with httpx.AsyncClient(timeout=60.0, verify=self.verify_ssl) as client:
                 response = await client.post(
                     request_url,
                     json=self._build_payload("test", model, user_session=effective_user_session),

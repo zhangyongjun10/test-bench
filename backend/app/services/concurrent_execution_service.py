@@ -28,12 +28,10 @@ from app.services.llm_service import LLMService
 from app.services.trace_fetcher import TraceFetcherImpl
 
 
-class ConcurrentExecutionMode:
-    SINGLE_INSTANCE = "single_instance"
-    MULTI_INSTANCE = "multi_instance"
-
-
+# 并发执行服务，负责为同一个场景创建多条隔离 user_session 的 Agent 执行记录。
 class ConcurrentExecutionService:
+    # Agent 请求固定使用 OpenClaw 主入口模型，避免把页面选择的比对模型误传给 Agent。
+    AGENT_REQUEST_MODEL = "openclaw:main"
     TRACE_FETCH_RETRIES = 5
     TRACE_FETCH_RETRY_INTERVAL_SECONDS = 2.0
     TRACE_ID_RESOLUTION_RETRIES = 5
@@ -41,18 +39,12 @@ class ConcurrentExecutionService:
     DEFERRED_COMPARISON_RETRIES = 12
     DEFERRED_COMPARISON_RETRY_INTERVAL_SECONDS = 5.0
 
-    def __init__(self, session: AsyncSession, mode: str = ConcurrentExecutionMode.SINGLE_INSTANCE):
+    # 初始化并发执行服务，所有并发请求统一按多路独立 execution 执行。
+    def __init__(self, session: AsyncSession):
         self.session = session
         self.repo: ExecutionRepository = SQLAlchemyExecutionRepository(session)
-        self.mode = mode
 
-    def _build_user_session(self, batch_id: str, call_index: int, agent: Optional[Agent]) -> str:
-        if agent and agent.user_session:
-            session_prefix = agent.user_session
-        else:
-            session_prefix = "opik-test"
-        return f"{session_prefix}-{batch_id[:8]}-{call_index}"
-
+    # 构建 Agent HTTP 客户端，正式执行超时使用全局 Agent 超时配置。
     def _build_client(self, agent: Agent) -> HTTPAgentClient:
         api_key = encryption_service.decrypt(agent.api_key_encrypted)
         return HTTPAgentClient(
@@ -63,14 +55,13 @@ class ConcurrentExecutionService:
             verify_ssl=False,
         )
 
+    # 创建并发执行批次并注册后台任务，前端只需传入并发数和比对模型。
     async def create_concurrent_execution(
         self,
         input_text: str,
         concurrency: int,
-        model: str,
         background_tasks: BackgroundTasks,
         scenario_id: UUID,
-        concurrent_mode: str,
         llm_model_id: UUID | None,
         agent_id: UUID,
     ) -> str:
@@ -78,8 +69,6 @@ class ConcurrentExecutionService:
             raise ValueError("input cannot be empty")
         if concurrency <= 0:
             raise ValueError("concurrency must be greater than 0")
-        if not model:
-            raise ValueError("model cannot be empty")
         if not scenario_id:
             raise ValueError("scenario_id is required")
         if not agent_id:
@@ -91,22 +80,19 @@ class ConcurrentExecutionService:
             batch_id,
             input_text,
             concurrency,
-            model,
             scenario_id,
-            concurrent_mode,
             llm_model_id,
             agent_id,
         )
         return batch_id
 
+    # 后台运行并发执行批次，为每一路并发创建独立 execution、user_session 和 trace_id。
     async def run_concurrent_execution(
         self,
         batch_id: str,
         input_text: str,
         concurrency: int,
-        model: str,
         scenario_id: UUID,
-        concurrent_mode: str,
         llm_model_id: UUID | None,
         agent_id: UUID,
     ) -> None:
@@ -118,57 +104,16 @@ class ConcurrentExecutionService:
                     logger.error("Agent %s not found for batch %s", agent_id, batch_id)
                     return
 
-                if concurrent_mode == ConcurrentExecutionMode.MULTI_INSTANCE:
-                    await self._run_multi_instance_concurrent(
-                        batch_id, input_text, concurrency, model, scenario_id, llm_model_id, agent
-                    )
-                else:
-                    await self._run_single_instance_concurrent(
-                        batch_id, input_text, concurrency, model, scenario_id, llm_model_id, agent
-                    )
+                await self._run_concurrent_calls(batch_id, input_text, concurrency, scenario_id, llm_model_id, agent)
             except Exception as exc:
                 logger.error("Concurrent execution failed: %s error=%s", batch_id, exc, exc_info=True)
 
-    async def _run_single_instance_concurrent(
+    # 统一执行并发调用，每一路独立创建客户端和数据库 Session，避免共享状态造成串扰。
+    async def _run_concurrent_calls(
         self,
         batch_id: str,
         input_text: str,
         concurrency: int,
-        model: str,
-        scenario_id: UUID,
-        llm_model_id: UUID | None,
-        agent: Agent,
-    ) -> None:
-        shared_client = self._build_client(agent)
-
-        async def execute_with_own_session(call_index: int):
-            async with AsyncSessionLocal() as session:
-                local_repo = SQLAlchemyExecutionRepository(session)
-                user_session = self._build_user_session(batch_id, call_index, agent)
-                return await self._execute_single_call(
-                    batch_id=batch_id,
-                    input_text=input_text,
-                    model=model,
-                    scenario_id=scenario_id,
-                    llm_model_id=llm_model_id,
-                    agent=agent,
-                    client=shared_client,
-                    repo=local_repo,
-                    call_index=call_index,
-                    user_session=user_session,
-                )
-
-        await asyncio.gather(
-            *(execute_with_own_session(i + 1) for i in range(concurrency)),
-            return_exceptions=True,
-        )
-
-    async def _run_multi_instance_concurrent(
-        self,
-        batch_id: str,
-        input_text: str,
-        concurrency: int,
-        model: str,
         scenario_id: UUID,
         llm_model_id: UUID | None,
         agent: Agent,
@@ -177,18 +122,15 @@ class ConcurrentExecutionService:
             async with AsyncSessionLocal() as session:
                 local_repo = SQLAlchemyExecutionRepository(session)
                 client = self._build_client(agent)
-                user_session = self._build_user_session(batch_id, call_index, agent)
                 return await self._execute_single_call(
                     batch_id=batch_id,
                     input_text=input_text,
-                    model=model,
                     scenario_id=scenario_id,
                     llm_model_id=llm_model_id,
                     agent=agent,
                     client=client,
                     repo=local_repo,
                     call_index=call_index,
-                    user_session=user_session,
                 )
 
         await asyncio.gather(
@@ -196,22 +138,24 @@ class ConcurrentExecutionService:
             return_exceptions=True,
         )
 
+    # 执行单路并发调用并落库，user_session 统一使用 exec_{execution_id} 保持会话隔离。
     async def _execute_single_call(
         self,
         *,
         batch_id: str,
         input_text: str,
-        model: str,
         scenario_id: UUID,
         llm_model_id: UUID | None,
         agent: Agent,
         client: HTTPAgentClient,
         repo: ExecutionRepository,
         call_index: int,
-        user_session: str,
     ) -> dict[str, Any]:
         start_time = time.time()
+        execution_id = uuid.uuid4()
+        user_session = f"exec_{execution_id.hex}"
         execution = ExecutionJob(
+            id=execution_id,
             agent_id=agent.id,
             scenario_id=scenario_id,
             llm_model_id=llm_model_id,
@@ -235,7 +179,7 @@ class ConcurrentExecutionService:
             response_content, response_data = await client.invoke(
                 input_text,
                 request_trace_id,
-                model=model,
+                model=self.AGENT_REQUEST_MODEL,
                 user_session=user_session,
             )
             execution.original_response = response_content
@@ -286,6 +230,7 @@ class ConcurrentExecutionService:
             logger.error("Concurrent execution call failed: %s", exc, exc_info=True)
             return {"execution_id": execution.id, "call_index": call_index, "success": False}
 
+    # 为并发执行结果触发比对；如果 Trace 尚未就绪，会写入处理中比对记录并安排延迟重试。
     async def _run_comparison(
         self,
         session: AsyncSession,
@@ -341,9 +286,11 @@ class ConcurrentExecutionService:
         await SQLAlchemyExecutionRepository(session).update(execution)
         return True, comparison_result.overall_passed
 
+    # 安排延迟比对任务，避免 Trace 异步落库慢导致当前批次立即误判。
     def _schedule_deferred_comparison(self, execution_id: UUID, scenario_id: UUID, llm_model_id: UUID) -> None:
         asyncio.create_task(self._run_deferred_comparison(execution_id, scenario_id, llm_model_id))
 
+    # 执行延迟比对任务，等待 Trace 后复用并发执行的比对逻辑更新执行状态。
     async def _run_deferred_comparison(self, execution_id: UUID, scenario_id: UUID, llm_model_id: UUID) -> None:
         async with AsyncSessionLocal() as session:
             execution_repo = SQLAlchemyExecutionRepository(session)
@@ -380,6 +327,7 @@ class ConcurrentExecutionService:
             )
             await execution_repo.update(execution)
 
+    # 带重试拉取执行 Trace，用于等待 OpenClaw/Opik 异步写入 span。
     async def _fetch_spans_with_retry(
         self,
         session: AsyncSession,
@@ -398,6 +346,7 @@ class ConcurrentExecutionService:
                 await asyncio.sleep(interval_seconds)
         return []
 
+    # 根据 Agent 返回的 run_id 反查真实 trace_id，解决 OpenClaw 响应 ID 与 Opik trace_id 不一致的问题。
     async def _resolve_trace_id_with_retry(
         self,
         session: AsyncSession,
@@ -414,6 +363,7 @@ class ConcurrentExecutionService:
                 await asyncio.sleep(interval_seconds)
         return None
 
+    # 写入或更新处理中比对记录，提示前端当前 Trace 尚未准备好。
     async def _upsert_pending_comparison(
         self,
         session: AsyncSession,
@@ -447,6 +397,7 @@ class ConcurrentExecutionService:
         )
         await comparison_repo.create(session, pending)
 
+    # 查询并发批次状态，汇总完成、失败、运行中数量以及每路执行的基础信息。
     async def get_concurrent_execution_status(self, batch_id: str) -> dict[str, Any]:
         executions = await self.repo.get_by_batch_id(batch_id)
         total = len(executions)

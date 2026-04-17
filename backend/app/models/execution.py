@@ -32,6 +32,7 @@ class ExecutionResponse(BaseModel):
     error_message: str | None
     original_request: str | None
     original_response: str | None
+    replay_count: int = 0
     started_at: datetime | None
     completed_at: datetime | None
     created_at: datetime
@@ -71,16 +72,16 @@ class ComparisonResult(BaseModel):
     reason: str
 
 
+# 创建并发执行请求，只暴露用户需要配置的并发数和比对模型，Agent 请求模型由后端固定。
 class ConcurrentExecutionRequest(BaseModel):
     input: str = Field(..., min_length=1)
     concurrency: int = Field(..., ge=1)
-    model: str = Field(..., min_length=1)
     scenario_id: UUID | None = None
-    concurrent_mode: str | None = "single_instance"
     llm_model_id: UUID | None = None
     agent_id: UUID | None = None
 
 
+# 并发执行创建响应，返回批次 ID 供前端轮询批次状态。
 class ConcurrentExecutionResponse(BaseModel):
     batch_id: str
     message: str

@@ -59,13 +59,13 @@ const generateIdempotencyKey = () => {
   return `fallback-${Date.now()}`
 }
 
+// 执行创建表单值，只暴露用户需要选择的 Agent、场景、比对模型和并发数。
 type ExecutionFormValues = {
   agent_id: string
   scenario_id: string
   llm_model_id: string
   mode: 'single' | 'concurrent'
   concurrency?: number
-  concurrent_mode?: 'single_instance' | 'multi_instance'
 }
 
 const ExecutionList = () => {
@@ -151,7 +151,6 @@ const ExecutionList = () => {
     form.setFieldsValue({
       mode: 'single',
       concurrency: 1,
-      concurrent_mode: 'single_instance',
     })
     setModalVisible(true)
   }
@@ -174,9 +173,7 @@ const ExecutionList = () => {
         const payload: CreateConcurrentExecutionRequest = {
           input: scenario.prompt,
           concurrency: values.concurrency || 1,
-          model: llm.model_id,
           scenario_id: values.scenario_id,
-          concurrent_mode: values.concurrent_mode || 'single_instance',
           llm_model_id: values.llm_model_id,
           agent_id: values.agent_id,
         }
@@ -276,6 +273,13 @@ const ExecutionList = () => {
       key: 'comparison_passed',
       width: 120,
       render: value => (value === true ? <Tag color="green">通过</Tag> : value === false ? <Tag color="red">未通过</Tag> : '-'),
+    },
+    {
+      title: '回放',
+      dataIndex: 'replay_count',
+      key: 'replay_count',
+      width: 120,
+      render: value => (value && value > 0 ? <Tag color="blue">已回放 {value} 次</Tag> : '-'),
     },
     {
       title: '创建时间',
@@ -386,14 +390,6 @@ const ExecutionList = () => {
                 <>
                   <Form.Item name="concurrency" label="并发数" rules={[{ required: true, message: '请输入并发数' }]}>
                     <InputNumber min={1} style={{ width: '100%' }} />
-                  </Form.Item>
-                  <Form.Item name="concurrent_mode" label="并发模式" rules={[{ required: true, message: '请选择并发模式' }]}>
-                    <Select
-                      options={[
-                        { label: '单实例', value: 'single_instance' },
-                        { label: '多实例', value: 'multi_instance' },
-                      ]}
-                    />
                   </Form.Item>
                 </>
               ) : null

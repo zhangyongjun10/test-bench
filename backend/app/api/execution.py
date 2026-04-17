@@ -6,12 +6,14 @@ from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Query
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
 from app.core.logger import logger
 from app.domain.entities.comparison import ComparisonSourceType, ComparisonStatus
 from app.domain.entities.execution import ExecutionStatus
+from app.domain.entities.replay import ReplayTask
 from app.domain.repositories.comparison_repo import SQLAlchemyComparisonRepository
 from app.domain.repositories.execution_repo import SQLAlchemyExecutionRepository
 from app.domain.repositories.scenario_repo import SQLAlchemyScenarioRepository
@@ -26,7 +28,7 @@ from app.models.execution import (
     SpanResponse,
 )
 from app.services.comparison import ComparisonService
-from app.services.concurrent_execution_service import ConcurrentExecutionMode, ConcurrentExecutionService
+from app.services.concurrent_execution_service import ConcurrentExecutionService
 from app.services.execution_service import ExecutionService, count_openai_llm_spans, is_trace_ready_for_comparison
 from app.services.llm_service import LLMService
 from app.services.trace_fetcher import TraceFetcherImpl
@@ -55,8 +57,24 @@ async def list_executions(
 ) -> Response[ListResponse[ExecutionResponse]]:
     service = ExecutionService(session)
     total, executions = await service.list_executions(agent_id, scenario_id, limit, offset)
+    execution_ids = [execution.id for execution in executions]
+    replay_count_map: dict[UUID, int] = {}
+    if execution_ids:
+        replay_count_result = await session.execute(
+            select(ReplayTask.original_execution_id, func.count(ReplayTask.id))
+            .where(ReplayTask.original_execution_id.in_(execution_ids))
+            .group_by(ReplayTask.original_execution_id)
+        )
+        replay_count_map = {execution_id: count for execution_id, count in replay_count_result.all()}
+
+    items = []
+    for execution in executions:
+        item = ExecutionResponse.model_validate(execution)
+        item.replay_count = replay_count_map.get(execution.id, 0)
+        items.append(item)
+
     return Response[ListResponse[ExecutionResponse]](
-        data=ListResponse[ExecutionResponse](total=total, items=[ExecutionResponse.model_validate(e) for e in executions])
+        data=ListResponse[ExecutionResponse](total=total, items=items)
     )
 
 
@@ -334,6 +352,7 @@ async def trigger_recompare(
     return Response[RecompareResponse](data=RecompareResponse(success=True, message="Recompare triggered in background"))
 
 
+# 创建并发执行批次，前端只传并发数和比对模型，Agent 请求模型由服务层固定。
 @router.post("/concurrent")
 async def create_concurrent_execution(
     request: ConcurrentExecutionRequest,
@@ -341,15 +360,12 @@ async def create_concurrent_execution(
     session: AsyncSession = Depends(get_db),
 ) -> Response[ConcurrentExecutionResponse]:
     try:
-        mode = request.concurrent_mode or ConcurrentExecutionMode.SINGLE_INSTANCE
-        service = ConcurrentExecutionService(session, mode=mode)
+        service = ConcurrentExecutionService(session)
         batch_id = await service.create_concurrent_execution(
             request.input,
             request.concurrency,
-            request.model,
             background_tasks,
             request.scenario_id,
-            mode,
             request.llm_model_id,
             request.agent_id,
         )

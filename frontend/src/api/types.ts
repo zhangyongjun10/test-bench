@@ -94,6 +94,7 @@ export interface ExecutionJob {
   error_message?: string
   original_request?: string
   original_response?: string
+  replay_count?: number
   started_at?: string
   completed_at?: string
   created_at: string
@@ -106,12 +107,11 @@ export interface CreateExecutionRequest {
   llm_model_id?: string
 }
 
+// 创建并发执行请求，Agent 模型和并发执行策略由后端统一控制。
 export interface CreateConcurrentExecutionRequest {
   input: string
   concurrency: number
-  model: string
   scenario_id?: string
-  concurrent_mode?: 'single_instance' | 'multi_instance'
   llm_model_id?: string
   agent_id?: string
 }
