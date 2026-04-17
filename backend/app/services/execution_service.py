@@ -21,37 +21,28 @@ from app.domain.entities.comparison import ComparisonResult, ComparisonSourceTyp
 from app.domain.entities.execution import ExecutionJob, ExecutionRunSource, ExecutionStatus
 from app.domain.repositories.agent_repo import SQLAlchemyAgentRepository
 from app.domain.repositories.comparison_repo import SQLAlchemyComparisonRepository
-from app.domain.repositories.execution_repo import (
-    ExecutionRepository,
-    SQLAlchemyExecutionRepository,
-)
+from app.domain.repositories.execution_repo import ExecutionRepository, SQLAlchemyExecutionRepository
 from app.domain.repositories.scenario_repo import SQLAlchemyScenarioRepository
 from app.models.execution import CreateExecutionRequest
 from app.services.llm_service import LLMService
 
 
 def has_comparable_llm_output(spans: list) -> bool:
-    """Return true when trace has an OpenAI LLM span with extractable output."""
     return has_final_openai_llm_output(spans)
 
 
 def has_tool_call_output(output: str) -> bool:
-    """Return true when an LLM output payload represents a tool call turn."""
     if not output:
         return False
-
     try:
         parsed = json.loads(output)
     except json.JSONDecodeError:
         return False
-
     if not isinstance(parsed, dict):
         return False
-
     choices = parsed.get("choices")
     if not isinstance(choices, list):
         return False
-
     for choice in choices:
         if not isinstance(choice, dict):
             continue
@@ -65,7 +56,6 @@ def has_tool_call_output(output: str) -> bool:
 
 
 def has_final_openai_llm_output(spans: list) -> bool:
-    """Return true when the last OpenAI LLM span is final assistant text."""
     from app.services.comparison import extract_llm_content
 
     llm_spans = [
@@ -76,13 +66,11 @@ def has_final_openai_llm_output(spans: list) -> bool:
     ]
     if not llm_spans:
         return False
-
     output = getattr(llm_spans[-1], "output", "") or ""
     return bool(extract_llm_content(output).strip()) and not has_tool_call_output(output)
 
 
 def count_openai_llm_spans(spans: list) -> int:
-    """Count OpenAI provider LLM spans used by the comparison flow."""
     return sum(
         1
         for span in spans
@@ -92,11 +80,6 @@ def count_openai_llm_spans(spans: list) -> int:
 
 
 def is_trace_ready_for_comparison(spans: list, expected_min_llm_count: int) -> bool:
-    """Trace is ready once final text is visible.
-
-    The minimum count is validated by the comparison result. It should not force
-    us to wait once the agent has already produced a final assistant response.
-    """
     del expected_min_llm_count
     return has_final_openai_llm_output(spans)
 
@@ -109,7 +92,6 @@ class ExecutionService:
         self.session = session
 
     async def create_execution(self, request: CreateExecutionRequest, background_tasks: BackgroundTasks) -> UUID:
-        """Create an execution task and schedule background processing."""
         agent = await self.agent_repo.get_by_id(request.agent_id)
         if not agent:
             raise ValueError(f"Agent {request.agent_id} not found")
@@ -118,10 +100,11 @@ class ExecutionService:
         if not scenario:
             raise ValueError(f"Scenario {request.scenario_id} not found")
 
-        llm_service = LLMService(self.session)
-        llm_model = await llm_service.get_llm(request.llm_model_id)
-        if not llm_model:
-            raise ValueError(f"LLM model {request.llm_model_id} not found")
+        if request.llm_model_id:
+            llm_service = LLMService(self.session)
+            llm_model = await llm_service.get_llm(request.llm_model_id)
+            if not llm_model:
+                raise ValueError(f"LLM model {request.llm_model_id} not found")
 
         execution_id = uuid.uuid4()
         execution = ExecutionJob(
@@ -131,6 +114,7 @@ class ExecutionService:
             llm_model_id=request.llm_model_id,
             user_session=f"exec_{execution_id.hex}",
             run_source=ExecutionRunSource.NORMAL,
+            batch_id=None,
             trace_id=str(uuid.uuid4()),
             status=ExecutionStatus.QUEUED,
         )
@@ -141,7 +125,6 @@ class ExecutionService:
         return result.id
 
     async def run_execution(self, execution_id: UUID, *, auto_compare: bool = True) -> None:
-        """Execute the full replay flow in the background."""
         from app.services.comparison import ComparisonService
         from app.services.metric_extractor import MetricExtractor
         from app.services.trace_fetcher import TraceFetcherImpl
@@ -165,7 +148,6 @@ class ExecutionService:
             if not scenario:
                 raise ValueError(f"Scenario {execution.scenario_id} not found")
 
-            logger.info("Calling agent: %s for execution %s", agent.id, execution_id)
             api_key = encryption_service.decrypt(agent.api_key_encrypted)
             client = HTTPAgentClient(
                 agent.base_url,
@@ -177,7 +159,6 @@ class ExecutionService:
             execution.original_request = scenario.prompt
             response_content, response_data = await client.invoke(scenario.prompt, execution.trace_id)
             execution.original_response = response_content
-            logger.info("Agent call completed: %s", execution_id)
 
             if response_data and isinstance(response_data, dict) and "id" in response_data:
                 run_id = str(response_data["id"])
@@ -195,59 +176,35 @@ class ExecutionService:
             expected_min_llm_count = scenario.llm_count_min or 0
             for index, delay in enumerate(retry_delays):
                 if delay:
-                    logger.info(
-                        "Trace not ready, waiting %ss before retry (%s/%s)...",
-                        delay,
-                        index,
-                        len(retry_delays) - 1,
-                    )
+                    logger.info("Trace not ready, waiting %ss before retry (%s/%s)...", delay, index, len(retry_delays) - 1)
                     await asyncio.sleep(delay)
                 spans = await trace_fetcher.fetch_spans(execution.trace_id)
-                if spans and (
-                    not scenario.compare_enabled
-                    or is_trace_ready_for_comparison(spans, expected_min_llm_count)
-                ):
+                if spans and (not scenario.compare_enabled or is_trace_ready_for_comparison(spans, expected_min_llm_count)):
                     break
                 if spans and scenario.compare_enabled:
                     logger.info(
-                        (
-                            "Trace has %s spans and %s OpenAI LLM spans, "
-                            "but comparison is not ready yet for execution %s"
-                        ),
+                        "Trace has %s spans and %s OpenAI LLM spans, but comparison is not ready yet for execution %s",
                         len(spans),
                         count_openai_llm_spans(spans),
                         execution_id,
                     )
 
-            if not spans:
-                logger.warning("No spans found for trace %s after retries", execution.trace_id)
-            elif auto_compare and scenario.compare_enabled and not is_trace_ready_for_comparison(spans, expected_min_llm_count):
-                logger.warning(
-                    "Trace %s is not fully ready for comparison after retries",
-                    execution.trace_id,
-                )
-            logger.info("Pulled %s spans for execution %s", len(spans), execution_id)
-
             extractor = MetricExtractor()
             extractor.extract(spans)
-            logger.info("Metrics extracted for execution %s", execution_id)
 
             if auto_compare:
                 execution.status = ExecutionStatus.COMPARING
                 await self.repo.update(execution)
 
             overall_passed: Optional[bool] = None
-            if auto_compare and scenario.compare_enabled:
+            if auto_compare and scenario.compare_enabled and execution.llm_model_id:
                 llm_service = LLMService(self.session)
                 llm_model = await llm_service.get_llm(execution.llm_model_id)
                 if not llm_model:
                     raise ValueError(f"LLM model {execution.llm_model_id} not found")
 
                 comparison_repo = SQLAlchemyComparisonRepository()
-                comparison_service = ComparisonService(
-                    llm_service.get_client(llm_model),
-                    comparison_repo,
-                )
+                comparison_service = ComparisonService(llm_service.get_client(llm_model), comparison_repo)
 
                 try:
                     comparison_result = await comparison_service.detailed_compare(
@@ -261,18 +218,8 @@ class ExecutionService:
                     execution.comparison_score = None
                     execution.comparison_passed = comparison_result.overall_passed
                     overall_passed = comparison_result.overall_passed
-                    logger.info(
-                        "Detailed comparison completed: execution=%s overall_passed=%s",
-                        execution_id,
-                        comparison_result.overall_passed,
-                    )
                 except Exception as exc:
-                    logger.error(
-                        "Detailed comparison failed for execution %s: %s",
-                        execution_id,
-                        exc,
-                        exc_info=True,
-                    )
+                    logger.error("Detailed comparison failed for execution %s: %s", execution_id, exc, exc_info=True)
                     await comparison_repo.create(
                         self.session,
                         ComparisonResult(
@@ -293,18 +240,13 @@ class ExecutionService:
                     execution.comparison_score = None
                     execution.comparison_passed = None
 
-            execution.status = (
-                ExecutionStatus.COMPLETED_WITH_MISMATCH
-                if overall_passed is False
-                else ExecutionStatus.COMPLETED
-            )
+            execution.status = ExecutionStatus.COMPLETED_WITH_MISMATCH if overall_passed is False else ExecutionStatus.COMPLETED
             execution.completed_at = datetime.now(UTC)
             await self.repo.update(execution)
 
             duration = time.time() - started_at
             increment_executions_total(status=ExecutionStatus.COMPLETED)
             observe_execution_duration(duration)
-            logger.info("Execution completed: %s duration=%.2fs", execution_id, duration)
         except Exception as exc:
             execution.status = ExecutionStatus.FAILED
             execution.error_message = str(exc)
@@ -317,7 +259,6 @@ class ExecutionService:
             logger.error("Execution failed: %s error=%s", execution_id, exc, exc_info=True)
 
     async def get_execution(self, execution_id: UUID) -> Optional[ExecutionJob]:
-        """Get a single execution."""
         return await self.repo.get_by_id(execution_id)
 
     async def list_executions(
@@ -327,27 +268,20 @@ class ExecutionService:
         limit: int = 20,
         offset: int = 0,
     ) -> tuple[int, list[ExecutionJob]]:
-        """List executions."""
         return await self.repo.list_all(agent_id, scenario_id, limit, offset)
 
     async def delete_execution(self, execution_id: UUID) -> bool:
-        """Delete an execution."""
         execution = await self.repo.get_by_id(execution_id)
         if not execution:
             return False
         comparison_repo = SQLAlchemyComparisonRepository()
         deleted_count = await comparison_repo.delete_by_execution_id(self.session, execution_id)
         await self.repo.delete(execution_id)
-        logger.info(
-            "Deleted execution: %s (removed %s comparison rows first)",
-            execution_id,
-            deleted_count,
-        )
+        logger.info("Deleted execution: %s (removed %s comparison rows first)", execution_id, deleted_count)
         return True
 
 
 async def _run_execution_background(execution_id: UUID) -> None:
-    """Background task entrypoint with its own session."""
     async with AsyncSessionLocal() as session:
         service = ExecutionService(session)
         await service.run_execution(execution_id)

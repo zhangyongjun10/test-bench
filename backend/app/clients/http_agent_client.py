@@ -2,6 +2,7 @@
 
 import logging
 import uuid
+from urllib.parse import urlparse
 
 import httpx
 
@@ -20,19 +21,23 @@ def _format_exception_message(exc: Exception) -> str:
 
 
 class HTTPAgentClient:
-    """HTTP Agent client.
+    """HTTP client for invoking OpenAI-compatible agent endpoints."""
 
-    All invocations use the OpenClaw-compatible chat completion payload so every
-    execution can be isolated by its own `user` value.
-    """
-
-    def __init__(self, base_url: str, api_key: str, timeout: int = None, user_session: str = None):
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str,
+        timeout: int | None = None,
+        user_session: str | None = None,
+        verify_ssl: bool = True,
+    ):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout or settings.agent_timeout_seconds
         self.user_session = user_session
+        self.verify_ssl = verify_ssl
 
-    def _get_headers(self, trace_id: str = None) -> dict:
+    def _get_headers(self, trace_id: str | None = None) -> dict:
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -41,23 +46,38 @@ class HTTPAgentClient:
             headers["X-Trace-ID"] = trace_id
         return headers
 
-    def _build_payload(self, prompt: str, user_session: str) -> dict:
-        return {
-            "model": "openclaw:main",
+    def _build_request_url(self) -> str:
+        parsed = urlparse(self.base_url)
+        path = parsed.path.rstrip("/")
+        if path.endswith("/v1/chat/completions"):
+            return self.base_url
+        if path in ("", "/"):
+            return f"{self.base_url}/v1/chat/completions"
+        return self.base_url
+
+    def _build_payload(
+        self,
+        prompt: str,
+        model: str = "openclaw:main",
+        user_session: str | None = None,
+    ) -> dict:
+        payload = {
+            "model": model,
             "messages": [{"role": "user", "content": prompt}],
-            "user": user_session,
         }
+        effective_user_session = user_session if user_session is not None else self.user_session
+        if effective_user_session:
+            payload["user"] = effective_user_session
+        return payload
 
-    async def test_connection(self) -> tuple[bool, str]:
-        """Test the configured agent endpoint with an isolated temporary user."""
+    async def test_connection(self, model: str = "openclaw:main", user_session: str | None = None) -> tuple[bool, str]:
+        request_url = self._build_request_url()
+        effective_user_session = user_session if user_session is not None else (self.user_session or f"test_{uuid.uuid4().hex}")
         try:
-            user_session = self.user_session or f"test_{uuid.uuid4().hex}"
-            payload = self._build_payload("test", user_session)
-
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            async with httpx.AsyncClient(timeout=10.0, verify=self.verify_ssl) as client:
                 response = await client.post(
-                    self.base_url,
-                    json=payload,
+                    request_url,
+                    json=self._build_payload("test", model, user_session=effective_user_session),
                     headers=self._get_headers(),
                 )
 
@@ -77,23 +97,28 @@ class HTTPAgentClient:
             logger.error("Agent connection test failed: %s", message)
             return False, message
 
-    async def invoke(self, prompt: str, trace_id: str = None) -> tuple[str, dict | None]:
-        """Invoke the agent and return `(assistant_content, raw_response)`."""
-        user_session = self.user_session or f"exec_{uuid.uuid4().hex}"
-        payload = self._build_payload(prompt, user_session)
+    async def invoke(
+        self,
+        prompt: str,
+        trace_id: str | None = None,
+        model: str = "openclaw:main",
+        user_session: str | None = None,
+    ) -> tuple[str, dict | None]:
+        url = self._build_request_url()
+        effective_user_session = user_session if user_session is not None else (self.user_session or f"exec_{uuid.uuid4().hex}")
 
         logger.info(
             "Invoking agent url=%s trace_id=%s user_session=%s prompt_length=%s",
-            self.base_url,
+            url,
             trace_id,
-            user_session,
+            effective_user_session,
             len(prompt),
         )
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with httpx.AsyncClient(timeout=self.timeout, verify=self.verify_ssl) as client:
             response = await client.post(
-                self.base_url,
-                json=payload,
+                url,
+                json=self._build_payload(prompt, model, user_session=effective_user_session),
                 headers=self._get_headers(trace_id),
             )
             response.raise_for_status()

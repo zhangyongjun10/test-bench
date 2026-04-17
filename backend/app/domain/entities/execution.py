@@ -21,6 +21,7 @@ class ExecutionJob(Base):
     parent_execution_id = Column(UUID(as_uuid=True), ForeignKey("execution_jobs.id"), nullable=True)
     request_snapshot_json = Column(Text)
     trace_id = Column(String(255))
+    batch_id = Column(String(255))
     status = Column(String(50), nullable=False)
     original_request = Column(Text)
     original_response = Column(Text)

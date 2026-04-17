@@ -13,10 +13,7 @@ from Levenshtein import distance
 from app.clients.llm_client import LLMClient
 from app.core.logger import logger
 from app.core.metrics import observe_llm_compare_duration
-from app.domain.entities.comparison import (
-    ComparisonResult as ComparisonResultEntity,
-    ComparisonStatus,
-)
+from app.domain.entities.comparison import ComparisonResult as ComparisonResultEntity, ComparisonStatus
 from app.domain.entities.execution import ExecutionJob
 from app.domain.entities.llm import LLMModel
 from app.domain.entities.scenario import Scenario
@@ -25,14 +22,12 @@ from app.domain.repositories.comparison_repo import ComparisonRepository
 from app.models.execution import ComparisonResult
 from app.models.llm import DEFAULT_COMPARISON_PROMPT
 
-
 MAX_RETRIES = 3
 MAX_CONTENT_LENGTH = 8000
 ALGORITHM_PASS_THRESHOLD = 0.9
 
 
 def levenshtein_similarity(a: str, b: str) -> float:
-    """Return a normalized similarity score in [0, 1]."""
     edit_distance = distance(a, b)
     max_len = max(len(a), len(b))
     if max_len == 0:
@@ -41,41 +36,31 @@ def levenshtein_similarity(a: str, b: str) -> float:
 
 
 def normalize_json_content(content: str) -> str:
-    """Normalize JSON-looking content for stable comparisons."""
     if not content:
         return content
-
     content = re.sub(r"^```(?:json)?\n", "", content.strip())
     content = re.sub(r"\n```$", "", content)
     content = content.strip()
-
     if not (content.startswith("{") or content.startswith("[")):
         return content
-
     try:
         parsed = json.loads(content)
     except json.JSONDecodeError:
         return content
-
     return json.dumps(parsed, sort_keys=True, ensure_ascii=False)
 
 
 def truncate_content(content: str) -> str:
-    """Trim overly long content before sending it to an LLM."""
     if len(content) <= MAX_CONTENT_LENGTH:
         return content
     return content[: MAX_CONTENT_LENGTH - 10] + "\n[...truncated]"
 
 
 def calculate_algorithm_similarity(actual: str, baseline: str) -> float:
-    """Run the legacy algorithm coarse screening on normalized content."""
-    normalized_actual = normalize_json_content(actual)
-    normalized_baseline = normalize_json_content(baseline)
-    return levenshtein_similarity(normalized_actual, normalized_baseline)
+    return levenshtein_similarity(normalize_json_content(actual), normalize_json_content(baseline))
 
 
 def extract_llm_content(output: str) -> str:
-    """Extract assistant-visible text from an LLM span output payload."""
     if not output:
         return output
 
@@ -95,17 +80,11 @@ def extract_llm_content(output: str) -> str:
     except json.JSONDecodeError:
         return output
 
-    if isinstance(parsed, dict) and "assistantTexts" in parsed:
-        texts = parsed["assistantTexts"]
-        if isinstance(texts, list):
-            return "\n".join(str(text) for text in texts if text)
+    if isinstance(parsed, dict) and "assistantTexts" in parsed and isinstance(parsed["assistantTexts"], list):
+        return "\n".join(str(text) for text in parsed["assistantTexts"] if text)
 
     if isinstance(parsed, dict) and "lastAssistant" in parsed:
-        content = parsed["lastAssistant"].get("content")
-        extracted = extract_message_content(content)
-        if extracted:
-            return extracted
-        return ""
+        return extract_message_content(parsed["lastAssistant"].get("content"))
 
     if isinstance(parsed, dict):
         choices = parsed.get("choices")
@@ -137,22 +116,17 @@ def extract_llm_content(output: str) -> str:
 
 
 def has_tool_call_output(output: str) -> bool:
-    """Return true when an LLM output payload represents a tool call turn."""
     if not output:
         return False
-
     try:
         parsed = json.loads(output)
     except json.JSONDecodeError:
         return False
-
     if not isinstance(parsed, dict):
         return False
-
     choices = parsed.get("choices")
     if not isinstance(choices, list):
         return False
-
     for choice in choices:
         if not isinstance(choice, dict):
             continue
@@ -166,10 +140,8 @@ def has_tool_call_output(output: str) -> bool:
 
 
 def extract_final_llm_content(llm_spans: list[Span]) -> str:
-    """Extract final output only when the last comparable LLM span is text."""
     if not llm_spans:
         return ""
-
     output = llm_spans[-1].output or ""
     if has_tool_call_output(output):
         return ""
@@ -179,19 +151,15 @@ def extract_final_llm_content(llm_spans: list[Span]) -> str:
 class ComparisonService:
     """LLM-only comparison service."""
 
-    RESULT_COMPARE_PROMPT = """请判断下面【基线输出】和【实际输出】的核心语义是否一致：
+    RESULT_COMPARE_PROMPT = """Compare whether the baseline output and actual output are semantically consistent.
 
-基线输出:
+Baseline:
 {baseline}
 
-实际输出:
+Actual:
 {actual}
 
-要求：
-1. 核心语义一致时返回 consistent = true
-2. 核心语义不一致时返回 consistent = false
-3. 简要说明判断原因
-4. 只输出 JSON：{"consistent": boolean, "reason": string, "score": number}
+Return JSON only: {"consistent": boolean, "reason": string, "score": number}
 """
 
     def __init__(self, llm_client: LLMClient, comparison_repo: Optional[ComparisonRepository] = None):
@@ -200,39 +168,25 @@ class ComparisonService:
 
     @staticmethod
     def _get_comparable_llm_spans(trace_spans: list[Span]) -> list[Span]:
-        """Keep only OpenAI LLM spans in the comparison flow."""
-        return [
-            span
-            for span in trace_spans
-            if (span.span_type or "").lower() == "llm" and (span.provider or "").lower() == "openai"
-        ]
+        llm_spans = [span for span in trace_spans if (span.span_type or "").lower() == "llm"]
+        openai_spans = [span for span in llm_spans if (span.provider or "").lower() == "openai"]
+        return openai_spans or llm_spans
 
-    async def _verify_with_llm(
-        self,
-        prompt: str,
-        actual_output: str,
-        baseline_output: str,
-    ) -> tuple[bool, str]:
+    async def _verify_with_llm(self, prompt: str, actual_output: str, baseline_output: str) -> tuple[bool, str]:
         last_error: Exception | None = None
-
         for attempt in range(MAX_RETRIES):
             try:
-                _, consistent, reason = await self.llm_client.compare(
-                    prompt,
-                    actual_output,
-                    baseline_output,
-                )
+                _, consistent, reason = await self.llm_client.compare(prompt, actual_output, baseline_output)
                 return consistent, reason
-            except Exception as exc:  # pragma: no cover - defensive retry path
+            except Exception as exc:
                 last_error = exc
                 if attempt == MAX_RETRIES - 1:
                     break
                 await asyncio.sleep(2**attempt)
-
         logger.warning("LLM verification failed after retries: %s", last_error)
         if isinstance(last_error, httpx.TimeoutException):
-            return False, f"LLM 语义校验请求超时，已重试 {MAX_RETRIES} 次"
-        return False, f"LLM 语义校验失败：{last_error}" if last_error else "LLM 语义校验失败"
+            return False, f"LLM verification timed out after {MAX_RETRIES} retries"
+        return False, f"LLM verification failed: {last_error}" if last_error else "LLM verification failed"
 
     async def detailed_compare(
         self,
@@ -241,10 +195,8 @@ class ComparisonService:
         trace_spans: list[Span],
         llm_model: LLMModel,
     ) -> ComparisonResultEntity:
-        """Run the LLM-only replay comparison flow."""
         llm_spans = self._get_comparable_llm_spans(trace_spans)
         actual_count = len(llm_spans)
-
         expected_min = scenario.llm_count_min or 0
         expected_max = scenario.llm_count_max if scenario.llm_count_max is not None else expected_min
         invalid_range = expected_min < 0 or expected_max < 0 or expected_min > expected_max
@@ -258,7 +210,7 @@ class ComparisonService:
         }
 
         baseline_output = (scenario.baseline_result or "").strip()
-        actual_output = extract_final_llm_content(llm_spans)
+        actual_output = extract_final_llm_content(llm_spans) or (execution.original_response or "").strip()
         final_output_comparison = {
             "baseline_output": baseline_output,
             "actual_output": actual_output,
@@ -270,42 +222,33 @@ class ComparisonService:
 
         error_message: str | None = None
         if invalid_range:
-            error_message = "场景配置的 LLM 调用次数范围无效"
+            error_message = "Invalid LLM count range configuration"
             final_output_comparison["reason"] = error_message
         elif not count_passed:
             final_output_comparison["reason"] = (
-                f"LLM 调用次数不符合预期，实际为 {actual_count} 次，"
-                f"期望范围为 {expected_min} ~ {expected_max} 次"
+                f"LLM call count {actual_count} is outside expected range {expected_min} to {expected_max}"
             )
         elif not baseline_output:
-            final_output_comparison["reason"] = "场景基线输出为空"
+            final_output_comparison["reason"] = "Scenario baseline output is empty"
         elif not actual_output:
-            final_output_comparison["reason"] = "Trace 中没有找到最终 LLM 输出"
+            final_output_comparison["reason"] = "No final LLM output found"
         else:
             similarity = calculate_algorithm_similarity(actual_output, baseline_output)
             final_output_comparison["algorithm_similarity"] = similarity
-
             if similarity >= ALGORITHM_PASS_THRESHOLD:
                 final_output_comparison["consistent"] = True
                 final_output_comparison["verification_mode"] = "algorithm_short_circuit"
-                final_output_comparison["reason"] = (
-                    f"算法粗筛相似度为 {similarity:.3f}，达到直通阈值，已跳过 LLM 语义校验。"
-                )
+                final_output_comparison["reason"] = f"Algorithm similarity {similarity:.3f} passed the shortcut threshold"
             else:
                 prompt_template = (llm_model.comparison_prompt or DEFAULT_COMPARISON_PROMPT).strip()
                 prompt = prompt_template.replace("{{baseline_result}}", baseline_output)
                 prompt = prompt.replace("{{actual_result}}", actual_output)
-
                 started_at = time.time()
-                consistent, reason = await self._verify_with_llm(
-                    prompt,
-                    actual_output,
-                    baseline_output,
-                )
+                consistent, reason = await self._verify_with_llm(prompt, actual_output, baseline_output)
                 observe_llm_compare_duration(time.time() - started_at)
                 final_output_comparison["consistent"] = consistent
                 final_output_comparison["verification_mode"] = (
-                    "llm_verification" if consistent or not reason.startswith("LLM 语义校验") else "llm_verification_error"
+                    "llm_verification" if consistent or not reason.startswith("LLM verification") else "llm_verification_error"
                 )
                 final_output_comparison["reason"] = reason
 
@@ -346,10 +289,8 @@ class ComparisonService:
         replay_task_id: object | None = None,
         baseline_source: str | None = None,
     ) -> ComparisonResultEntity:
-        """Run LLM-only comparison against an explicit frozen baseline."""
         llm_spans = self._get_comparable_llm_spans(trace_spans)
         actual_count = len(llm_spans)
-
         invalid_range = expected_min < 0 or expected_max < 0 or expected_min > expected_max
         count_passed = False if invalid_range else expected_min <= actual_count <= expected_max
         llm_count_check = {
@@ -359,7 +300,7 @@ class ComparisonService:
             "passed": count_passed,
         }
 
-        actual_output = extract_final_llm_content(llm_spans)
+        actual_output = extract_final_llm_content(llm_spans) or (execution.original_response or "").strip()
         final_output_comparison = {
             "baseline_output": (baseline_output or "").strip(),
             "actual_output": actual_output,
@@ -371,40 +312,33 @@ class ComparisonService:
 
         error_message: str | None = None
         if invalid_range:
-            error_message = "LLM 调用次数范围无效"
+            error_message = "Invalid LLM count range configuration"
             final_output_comparison["reason"] = error_message
         elif not count_passed:
             final_output_comparison["reason"] = (
-                f"LLM 调用次数不符合预期，实际为 {actual_count} 次，"
-                f"期望范围为 {expected_min} ~ {expected_max} 次"
+                f"LLM call count {actual_count} is outside expected range {expected_min} to {expected_max}"
             )
         elif not final_output_comparison["baseline_output"]:
-            final_output_comparison["reason"] = "基线输出为空"
+            final_output_comparison["reason"] = "Baseline output is empty"
         elif not actual_output:
-            final_output_comparison["reason"] = "Trace 中没有找到最终 LLM 输出"
+            final_output_comparison["reason"] = "No final LLM output found"
         else:
             similarity = calculate_algorithm_similarity(actual_output, final_output_comparison["baseline_output"])
             final_output_comparison["algorithm_similarity"] = similarity
             if similarity >= ALGORITHM_PASS_THRESHOLD:
                 final_output_comparison["consistent"] = True
                 final_output_comparison["verification_mode"] = "algorithm_short_circuit"
-                final_output_comparison["reason"] = (
-                    f"算法粗筛相似度为 {similarity:.3f}，达到直通阈值，已跳过 LLM 语义校验。"
-                )
+                final_output_comparison["reason"] = f"Algorithm similarity {similarity:.3f} passed the shortcut threshold"
             else:
                 prompt_template = (llm_model.comparison_prompt or DEFAULT_COMPARISON_PROMPT).strip()
                 prompt = prompt_template.replace("{{baseline_result}}", final_output_comparison["baseline_output"])
                 prompt = prompt.replace("{{actual_result}}", actual_output)
                 started_at = time.time()
-                consistent, reason = await self._verify_with_llm(
-                    prompt,
-                    actual_output,
-                    final_output_comparison["baseline_output"],
-                )
+                consistent, reason = await self._verify_with_llm(prompt, actual_output, final_output_comparison["baseline_output"])
                 observe_llm_compare_duration(time.time() - started_at)
                 final_output_comparison["consistent"] = consistent
                 final_output_comparison["verification_mode"] = (
-                    "llm_verification" if consistent or not reason.startswith("LLM 语义校验") else "llm_verification_error"
+                    "llm_verification" if consistent or not reason.startswith("LLM verification") else "llm_verification_error"
                 )
                 final_output_comparison["reason"] = reason
 
@@ -435,42 +369,24 @@ class ComparisonService:
         )
 
     async def compare(self, question: str, actual: str, baseline: str) -> ComparisonResult:
-        """Backward-compatible single-result comparison entrypoint."""
         del question
-
         prompt = self.RESULT_COMPARE_PROMPT.format(
             baseline=truncate_content(normalize_json_content(baseline)),
             actual=truncate_content(normalize_json_content(extract_llm_content(actual))),
         )
-
         started_at = time.time()
         last_error: Exception | None = None
-
         for attempt in range(MAX_RETRIES):
             try:
                 score, passed, reason = await self.llm_client.compare(prompt, actual, baseline)
                 observe_llm_compare_duration(time.time() - started_at)
-                logger.info(
-                    "Comparison completed: score=%s passed=%s duration=%.2fs",
-                    score,
-                    passed,
-                    time.time() - started_at,
-                )
-                return ComparisonResult(
-                    score=max(0.0, min(1.0, float(score))),
-                    passed=bool(passed),
-                    reason=str(reason or "LLM verification completed"),
-                )
-            except Exception as exc:  # pragma: no cover - defensive retry path
+                logger.info("Comparison completed: score=%s passed=%s duration=%.2fs", score, passed, time.time() - started_at)
+                return ComparisonResult(score=max(0.0, min(1.0, float(score))), passed=bool(passed), reason=str(reason or "LLM verification completed"))
+            except Exception as exc:
                 last_error = exc
                 if attempt == MAX_RETRIES - 1:
                     break
                 await asyncio.sleep(2**attempt)
-
         observe_llm_compare_duration(time.time() - started_at)
         logger.error("Comparison failed after retries: %s", last_error)
-        return ComparisonResult(
-            score=0.0,
-            passed=False,
-            reason=f"Comparison error: {last_error}" if last_error else "Comparison failed",
-        )
+        return ComparisonResult(score=0.0, passed=False, reason=f"Comparison error: {last_error}" if last_error else "Comparison failed")

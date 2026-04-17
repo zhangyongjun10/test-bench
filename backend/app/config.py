@@ -29,7 +29,9 @@ class Settings(BaseSettings):
     data_retention_days: int = 30
 
     # Agent 调用超时
-    agent_timeout_seconds: int = 1200
+    agent_timeout_seconds: int = 300
+    openclaw_base_url: Optional[str] = None
+    openclaw_api_key: Optional[str] = None
 
     model_config = {
         "env_file": ".env",

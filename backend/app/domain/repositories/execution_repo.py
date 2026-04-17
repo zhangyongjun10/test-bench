@@ -48,6 +48,10 @@ class ExecutionRepository(ABC):
     async def delete_old_data(self, days: int = 30) -> int:
         """Delete executions older than the retention threshold."""
 
+    @abstractmethod
+    async def get_by_batch_id(self, batch_id: str) -> List[ExecutionJob]:
+        """List executions for a batch id."""
+
 
 class SQLAlchemyExecutionRepository(ExecutionRepository):
     def __init__(self, session: AsyncSession):
@@ -192,14 +196,14 @@ class SQLAlchemyExecutionRepository(ExecutionRepository):
 
     async def delete_old_data(self, days: int = 30) -> int:
         cutoff = datetime.now(UTC) - timedelta(days=days)
-        result = await self.session.execute(
-            select(ExecutionJob.id).where(ExecutionJob.created_at < cutoff)
-        )
-        execution_ids = list(result.scalars().all())
+        await self._delete_comparisons_for_old_executions(cutoff)
+        stmt = delete(ExecutionJob).where(ExecutionJob.created_at < cutoff)
+        result = await self.session.execute(stmt)
+        await self.session.commit()
+        return result.rowcount or 0
 
-        deleted = 0
-        for execution_id in execution_ids:
-            if await self.get_by_id(execution_id):
-                await self.delete(execution_id)
-                deleted += 1
-        return deleted
+    async def get_by_batch_id(self, batch_id: str) -> List[ExecutionJob]:
+        result = await self.session.execute(
+            select(ExecutionJob).where(ExecutionJob.batch_id == batch_id).order_by(ExecutionJob.created_at)
+        )
+        return list(result.scalars().all())
