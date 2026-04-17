@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
   Alert,
   Button,
@@ -125,6 +125,36 @@ const formatVerificationMode = (mode?: string | null) => {
     return 'LLM 语义校验'
   }
   return mode || '-'
+}
+
+// 兼容历史比对结果里的英文原因，新比对后端会直接写中文，旧数据在页面展示时即时翻译。
+const formatComparisonReason = (reason?: string | null) => {
+  if (!reason) {
+    return '-'
+  }
+
+  const countMismatchMatch = reason.match(
+    /^LLM call count (\d+) is outside expected range (\d+) to (\d+)$/,
+  )
+  if (countMismatchMatch) {
+    const [, actualCount, expectedMin, expectedMax] = countMismatchMatch
+    return `LLM 调用次数不符合预期，实际为 ${actualCount} 次，期望范围为 ${expectedMin} ~ ${expectedMax} 次`
+  }
+
+  if (reason === 'Invalid LLM count range configuration') {
+    return 'LLM 调用次数范围配置无效'
+  }
+  if (reason === 'Scenario baseline output is empty') {
+    return '场景基线输出为空'
+  }
+  if (reason === 'Baseline output is empty') {
+    return '基线输出为空'
+  }
+  if (reason === 'No final LLM output found') {
+    return '未找到最终 LLM 输出'
+  }
+
+  return reason
 }
 
 const SPAN_THEME = {
@@ -499,10 +529,20 @@ const getStatusSurface = (status?: string) =>
     border: '#cbd5e1',
   }
 
+// 读取列表页传入的返回地址，保证从第几页进入详情就回到第几页。
+const getExecutionListReturnPath = (state: unknown) => {
+  if (state && typeof state === 'object' && 'from' in state && typeof state.from === 'string') {
+    return state.from
+  }
+  return '/executions'
+}
+
 const ExecutionDetail = () => {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const location = useLocation()
   const pollRef = useRef<number | null>(null)
+  const returnPath = getExecutionListReturnPath(location.state)
 
   const [loading, setLoading] = useState(false)
   const [traceLoading, setTraceLoading] = useState(false)
@@ -779,7 +819,7 @@ const ExecutionDetail = () => {
             type="primary"
             ghost
             icon={<LeftOutlined />}
-            onClick={() => navigate('/executions')}
+            onClick={() => navigate(returnPath)}
             style={{ borderRadius: 999, height: 40, paddingInline: 18 }}
           >
             返回列表
@@ -1171,7 +1211,7 @@ const ExecutionDetail = () => {
                   </Tag>
                 </Descriptions.Item>
                 <Descriptions.Item label="判断原因">
-                  {comparisonDetail.final_output_comparison.reason || '-'}
+                  {formatComparisonReason(comparisonDetail.final_output_comparison.reason)}
                 </Descriptions.Item>
                 <Descriptions.Item label="算法粗筛相似度">
                   {comparisonDetail.final_output_comparison.algorithm_similarity != null

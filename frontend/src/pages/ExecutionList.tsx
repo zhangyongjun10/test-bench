@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Button, Form, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, message } from 'antd'
 import { DeleteOutlined, EyeOutlined, PlusOutlined, RetweetOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 
 import { agentApi, executionApi, llmApi, replayApi, scenarioApi } from '../api/client'
 import type {
@@ -59,6 +59,12 @@ const generateIdempotencyKey = () => {
   return `fallback-${Date.now()}`
 }
 
+// 解析 URL 中的正整数分页参数，非法值统一回退到默认分页，避免列表初始化异常。
+const parsePositiveInteger = (value: string | null, fallback: number) => {
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
+}
+
 // 执行创建表单值，只暴露用户需要选择的 Agent、场景、比对模型和并发数。
 type ExecutionFormValues = {
   agent_id: string
@@ -70,16 +76,18 @@ type ExecutionFormValues = {
 
 const ExecutionList = () => {
   const navigate = useNavigate()
+  const location = useLocation()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [executions, setExecutions] = useState<ExecutionJob[]>([])
   const [total, setTotal] = useState(0)
   const [agents, setAgents] = useState<Agent[]>([])
   const [allScenarios, setAllScenarios] = useState<Scenario[]>([])
   const [filteredScenarios, setFilteredScenarios] = useState<Scenario[]>([])
   const [llms, setLlms] = useState<LLMModel[]>([])
-  const [selectedAgentId, setSelectedAgentId] = useState('')
-  const [selectedScenarioId, setSelectedScenarioId] = useState('')
-  const [currentPage, setCurrentPage] = useState(1)
-  const [pageSize, setPageSize] = useState(10)
+  const [selectedAgentId, setSelectedAgentId] = useState(() => searchParams.get('agent_id') || '')
+  const [selectedScenarioId, setSelectedScenarioId] = useState(() => searchParams.get('scenario_id') || '')
+  const [currentPage, setCurrentPage] = useState(() => parsePositiveInteger(searchParams.get('page'), 1))
+  const [pageSize, setPageSize] = useState(() => parsePositiveInteger(searchParams.get('page_size'), 10))
   const [loading, setLoading] = useState(false)
   const [modalVisible, setModalVisible] = useState(false)
   const [replayModalVisible, setReplayModalVisible] = useState(false)
@@ -93,6 +101,33 @@ const ExecutionList = () => {
     [allScenarios],
   )
   const llmNameMap = useMemo(() => Object.fromEntries(llms.map(model => [model.id, model.name])), [llms])
+
+  // 同步执行列表筛选和分页到 URL，详情页返回时可恢复原始页码和筛选条件。
+  const syncListSearch = (nextState: {
+    agentId?: string
+    scenarioId?: string
+    page?: number
+    size?: number
+  }) => {
+    const agentId = nextState.agentId ?? selectedAgentId
+    const scenarioId = nextState.scenarioId ?? selectedScenarioId
+    const page = nextState.page ?? currentPage
+    const size = nextState.size ?? pageSize
+    const nextParams = new URLSearchParams()
+    if (agentId) {
+      nextParams.set('agent_id', agentId)
+    }
+    if (scenarioId) {
+      nextParams.set('scenario_id', scenarioId)
+    }
+    if (page > 1) {
+      nextParams.set('page', String(page))
+    }
+    if (size !== 10) {
+      nextParams.set('page_size', String(size))
+    }
+    setSearchParams(nextParams, { replace: true })
+  }
 
   const loadAgents = async () => {
     const res = await agentApi.list()
@@ -111,10 +146,15 @@ const ExecutionList = () => {
     setLlms(res.data || [])
   }
 
-  const loadExecutions = async (page = currentPage, size = pageSize) => {
+  const loadExecutions = async (
+    page = currentPage,
+    size = pageSize,
+    agentId = selectedAgentId,
+    scenarioId = selectedScenarioId,
+  ) => {
     setLoading(true)
     try {
-      const res = await executionApi.list(selectedAgentId || undefined, selectedScenarioId || undefined, size, (page - 1) * size)
+      const res = await executionApi.list(agentId || undefined, scenarioId || undefined, size, (page - 1) * size)
       setExecutions(res.data.items || [])
       setTotal(res.data.total || 0)
     } catch (error: any) {
@@ -125,15 +165,23 @@ const ExecutionList = () => {
   }
 
   useEffect(() => {
-    void Promise.all([loadAgents(), loadScenarios(), loadLlms(), loadExecutions()]).catch((error: any) => {
+    void Promise.all([loadAgents(), loadScenarios(), loadLlms()]).catch((error: any) => {
       message.error(error.message)
     })
   }, [])
 
   useEffect(() => {
-    setCurrentPage(1)
-    void loadExecutions(1, pageSize)
-  }, [selectedAgentId, selectedScenarioId])
+    const nextAgentId = searchParams.get('agent_id') || ''
+    const nextScenarioId = searchParams.get('scenario_id') || ''
+    const nextPage = parsePositiveInteger(searchParams.get('page'), 1)
+    const nextPageSize = parsePositiveInteger(searchParams.get('page_size'), 10)
+
+    setSelectedAgentId(nextAgentId)
+    setSelectedScenarioId(nextScenarioId)
+    setCurrentPage(nextPage)
+    setPageSize(nextPageSize)
+    void loadExecutions(nextPage, nextPageSize, nextAgentId, nextScenarioId)
+  }, [searchParams])
 
   useEffect(() => {
     setFilteredScenarios(selectedAgentId ? allScenarios.filter(scenario => scenario.agent_id === selectedAgentId) : [])
@@ -189,6 +237,7 @@ const ExecutionList = () => {
       }
       setModalVisible(false)
       setCurrentPage(1)
+      syncListSearch({ page: 1 })
       await loadExecutions(1, pageSize)
     } catch (error: any) {
       if (error?.errorFields) {
@@ -204,6 +253,7 @@ const ExecutionList = () => {
       message.success('删除成功')
       const nextPage = executions.length === 1 && currentPage > 1 ? currentPage - 1 : currentPage
       setCurrentPage(nextPage)
+      syncListSearch({ page: nextPage })
       await loadExecutions(nextPage, pageSize)
     } catch (error: any) {
       message.error(error.message)
@@ -295,7 +345,16 @@ const ExecutionList = () => {
       fixed: 'right',
       render: (_, record) => (
         <Space size="middle">
-          <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => navigate(`/execution/${record.id}`)}>
+          <Button
+            type="link"
+            size="small"
+            icon={<EyeOutlined />}
+            onClick={() =>
+              navigate(`/execution/${record.id}`, {
+                state: { from: `${location.pathname}${location.search}` },
+              })
+            }
+          >
             详情
           </Button>
           <Button
@@ -326,8 +385,11 @@ const ExecutionList = () => {
           allowClear
           value={selectedAgentId || undefined}
           onChange={value => {
-            setSelectedAgentId(value || '')
+            const nextAgentId = value || ''
+            setSelectedAgentId(nextAgentId)
             setSelectedScenarioId('')
+            setCurrentPage(1)
+            syncListSearch({ agentId: nextAgentId, scenarioId: '', page: 1 })
           }}
           options={agents.map(agent => ({ label: agent.name, value: agent.id }))}
         />
@@ -336,7 +398,12 @@ const ExecutionList = () => {
           style={{ width: 220 }}
           allowClear
           value={selectedScenarioId || undefined}
-          onChange={value => setSelectedScenarioId(value || '')}
+          onChange={value => {
+            const nextScenarioId = value || ''
+            setSelectedScenarioId(nextScenarioId)
+            setCurrentPage(1)
+            syncListSearch({ scenarioId: nextScenarioId, page: 1 })
+          }}
           options={filteredScenarios.map(scenario => ({ label: scenario.name, value: scenario.id }))}
         />
         <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
@@ -359,7 +426,7 @@ const ExecutionList = () => {
             const nextSize = size || pageSize
             setCurrentPage(page)
             setPageSize(nextSize)
-            void loadExecutions(page, nextSize)
+            syncListSearch({ page, size: nextSize })
           },
         }}
       />

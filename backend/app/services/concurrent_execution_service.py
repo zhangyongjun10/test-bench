@@ -24,6 +24,7 @@ from app.domain.repositories.comparison_repo import SQLAlchemyComparisonReposito
 from app.domain.repositories.execution_repo import ExecutionRepository, SQLAlchemyExecutionRepository
 from app.domain.repositories.scenario_repo import SQLAlchemyScenarioRepository
 from app.services.comparison import ComparisonService
+from app.services.execution_service import count_openai_llm_spans, is_trace_ready_for_comparison
 from app.services.llm_service import LLMService
 from app.services.trace_fetcher import TraceFetcherImpl
 
@@ -32,11 +33,17 @@ from app.services.trace_fetcher import TraceFetcherImpl
 class ConcurrentExecutionService:
     # Agent 请求固定使用 OpenClaw 主入口模型，避免把页面选择的比对模型误传给 Agent。
     AGENT_REQUEST_MODEL = "openclaw:main"
+    # 首次拉取 Trace 的最大重试次数，避免并发执行刚结束时 Opik span 尚未完整写入。
     TRACE_FETCH_RETRIES = 5
+    # 首次拉取 Trace 的重试间隔秒数，配合 ready 判断等待最终 OpenAI 文本 span。
     TRACE_FETCH_RETRY_INTERVAL_SECONDS = 2.0
+    # 根据 run_id 反查真实 trace_id 的最大重试次数，处理 OpenClaw 响应 ID 与 Opik trace_id 延迟关联。
     TRACE_ID_RESOLUTION_RETRIES = 5
+    # 根据 run_id 反查真实 trace_id 的重试间隔秒数。
     TRACE_ID_RESOLUTION_RETRY_INTERVAL_SECONDS = 2.0
+    # 延迟比对最大重试次数，用于首次并发执行结束后 Trace 仍未达到可比对状态的场景。
     DEFERRED_COMPARISON_RETRIES = 12
+    # 延迟比对重试间隔秒数，避免过于频繁查询 ClickHouse。
     DEFERRED_COMPARISON_RETRY_INTERVAL_SECONDS = 5.0
 
     # 初始化并发执行服务，所有并发请求统一按多路独立 execution、独立 session 执行。
@@ -119,6 +126,7 @@ class ConcurrentExecutionService:
         agent: Agent,
     ) -> None:
         async def execute_with_own_session(call_index: int):
+            asyncio.current_task().set_name(f"concurrent:{batch_id}:call:{call_index}")
             async with AsyncSessionLocal() as session:
                 local_repo = SQLAlchemyExecutionRepository(session)
                 client = self._build_client(agent)
@@ -134,7 +142,7 @@ class ConcurrentExecutionService:
                 )
 
         await asyncio.gather(
-            *(execute_with_own_session(i + 1) for i in range(concurrency)),
+            *(asyncio.create_task(execute_with_own_session(i + 1)) for i in range(concurrency)),
             return_exceptions=True,
         )
 
@@ -250,19 +258,22 @@ class ConcurrentExecutionService:
             logger.warning("LLM model %s not found for execution %s", llm_model_id, execution.id)
             return False, None
 
-        spans = spans or await self._fetch_spans_with_retry(session, execution)
-        if not spans:
-            if execution.original_response:
-                spans = []
-            else:
-                await self._upsert_pending_comparison(
-                    session,
-                    execution,
-                    scenario_id,
-                    "Trace spans not ready yet; deferred comparison scheduled.",
-                )
-                self._schedule_deferred_comparison(execution.id, scenario_id, llm_model_id)
-                return False, None
+        expected_min_llm_count = scenario.llm_count_min or 0
+        if spans is None:
+            spans = await self._fetch_spans_with_retry(
+                session,
+                execution,
+                expected_min_llm_count=expected_min_llm_count,
+            )
+        if not spans or not is_trace_ready_for_comparison(spans, expected_min_llm_count):
+            await self._upsert_pending_comparison(
+                session,
+                execution,
+                scenario_id,
+                "Trace 尚未出现最终 OpenAI 文本输出，已安排延迟比对。",
+            )
+            self._schedule_deferred_comparison(execution.id, scenario_id, llm_model_id)
+            return False, None
 
         execution.status = ExecutionStatus.COMPARING
         await SQLAlchemyExecutionRepository(session).update(execution)
@@ -288,7 +299,10 @@ class ConcurrentExecutionService:
 
     # 安排延迟比对任务，避免 Trace 异步落库慢导致当前批次立即误判。
     def _schedule_deferred_comparison(self, execution_id: UUID, scenario_id: UUID, llm_model_id: UUID) -> None:
-        asyncio.create_task(self._run_deferred_comparison(execution_id, scenario_id, llm_model_id))
+        asyncio.create_task(
+            self._run_deferred_comparison(execution_id, scenario_id, llm_model_id),
+            name=f"comparison:{execution_id}",
+        )
 
     # 执行延迟比对任务，等待 Trace 后复用并发执行的比对逻辑更新执行状态。
     async def _run_deferred_comparison(self, execution_id: UUID, scenario_id: UUID, llm_model_id: UUID) -> None:
@@ -303,6 +317,7 @@ class ConcurrentExecutionService:
                 execution,
                 retries=self.DEFERRED_COMPARISON_RETRIES,
                 interval_seconds=self.DEFERRED_COMPARISON_RETRY_INTERVAL_SECONDS,
+                expected_min_llm_count=0,
             )
             if not spans:
                 return
@@ -334,14 +349,22 @@ class ConcurrentExecutionService:
         execution: ExecutionJob,
         retries: Optional[int] = None,
         interval_seconds: Optional[float] = None,
+        expected_min_llm_count: int = 0,
     ) -> list:
         trace_fetcher = TraceFetcherImpl(session)
         retries = retries or self.TRACE_FETCH_RETRIES
         interval_seconds = interval_seconds or self.TRACE_FETCH_RETRY_INTERVAL_SECONDS
         for attempt in range(1, retries + 1):
             spans = await trace_fetcher.fetch_spans(execution.trace_id)
-            if spans:
+            if spans and is_trace_ready_for_comparison(spans, expected_min_llm_count):
                 return spans
+            if spans:
+                logger.info(
+                    "Concurrent trace has %s spans and %s OpenAI LLM spans, but comparison is not ready yet for execution %s",
+                    len(spans),
+                    count_openai_llm_spans(spans),
+                    execution.id,
+                )
             if attempt < retries:
                 await asyncio.sleep(interval_seconds)
         return []

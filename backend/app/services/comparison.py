@@ -188,6 +188,59 @@ Return JSON only: {"consistent": boolean, "reason": string, "score": number}
             return False, f"LLM verification timed out after {MAX_RETRIES} retries"
         return False, f"LLM verification failed: {last_error}" if last_error else "LLM verification failed"
 
+    # 记录最终发送给比对模型的请求内容，方便排查 actual_output 是否来自最终 LLM span 或 original_response fallback。
+    @staticmethod
+    def _log_llm_verification_request(
+        *,
+        execution: ExecutionJob,
+        llm_model: LLMModel,
+        prompt: str,
+        actual_output: str,
+        baseline_output: str,
+        source_type: str,
+    ) -> None:
+        logger.info(
+            "LLM comparison request payload",
+            execution_id=str(execution.id),
+            trace_id=execution.trace_id,
+            source_type=source_type,
+            llm_model_id=str(llm_model.id),
+            llm_model_name=llm_model.name,
+            llm_model_provider=llm_model.provider,
+            llm_model_model_id=llm_model.model_id,
+            baseline_output_length=len(baseline_output),
+            actual_output_length=len(actual_output),
+            prompt=prompt,
+            baseline_output=baseline_output,
+            actual_output=actual_output,
+        )
+
+    # 记录比对模型返回结果，与请求日志通过 execution_id、trace_id 和 task_id 关联。
+    @staticmethod
+    def _log_llm_verification_response(
+        *,
+        execution: ExecutionJob,
+        llm_model: LLMModel,
+        consistent: bool,
+        reason: str,
+        duration_ms: float,
+        source_type: str,
+    ) -> None:
+        logger.info(
+            "LLM comparison response payload",
+            execution_id=str(execution.id),
+            trace_id=execution.trace_id,
+            source_type=source_type,
+            llm_model_id=str(llm_model.id),
+            llm_model_name=llm_model.name,
+            llm_model_provider=llm_model.provider,
+            llm_model_model_id=llm_model.model_id,
+            consistent=consistent,
+            reason=reason,
+            duration_ms=round(duration_ms, 2),
+        )
+
+    # 执行场景与基线的自动/重新比对，LLM 次数只统计 provider=openai 的 LLM span，最终输出允许 fallback 到 original_response。
     async def detailed_compare(
         self,
         scenario: Scenario,
@@ -222,16 +275,16 @@ Return JSON only: {"consistent": boolean, "reason": string, "score": number}
 
         error_message: str | None = None
         if invalid_range:
-            error_message = "Invalid LLM count range configuration"
+            error_message = "LLM 调用次数范围配置无效"
             final_output_comparison["reason"] = error_message
         elif not count_passed:
             final_output_comparison["reason"] = (
-                f"LLM call count {actual_count} is outside expected range {expected_min} to {expected_max}"
+                f"LLM 调用次数不符合预期，实际为 {actual_count} 次，期望范围为 {expected_min} ~ {expected_max} 次"
             )
         elif not baseline_output:
-            final_output_comparison["reason"] = "Scenario baseline output is empty"
+            final_output_comparison["reason"] = "场景基线输出为空"
         elif not actual_output:
-            final_output_comparison["reason"] = "No final LLM output found"
+            final_output_comparison["reason"] = "未找到最终 LLM 输出"
         else:
             similarity = calculate_algorithm_similarity(actual_output, baseline_output)
             final_output_comparison["algorithm_similarity"] = similarity
@@ -243,9 +296,26 @@ Return JSON only: {"consistent": boolean, "reason": string, "score": number}
                 prompt_template = (llm_model.comparison_prompt or DEFAULT_COMPARISON_PROMPT).strip()
                 prompt = prompt_template.replace("{{baseline_result}}", baseline_output)
                 prompt = prompt.replace("{{actual_result}}", actual_output)
+                self._log_llm_verification_request(
+                    execution=execution,
+                    llm_model=llm_model,
+                    prompt=prompt,
+                    actual_output=actual_output,
+                    baseline_output=baseline_output,
+                    source_type="execution",
+                )
                 started_at = time.time()
                 consistent, reason = await self._verify_with_llm(prompt, actual_output, baseline_output)
-                observe_llm_compare_duration(time.time() - started_at)
+                duration_seconds = time.time() - started_at
+                observe_llm_compare_duration(duration_seconds)
+                self._log_llm_verification_response(
+                    execution=execution,
+                    llm_model=llm_model,
+                    consistent=consistent,
+                    reason=reason,
+                    duration_ms=duration_seconds * 1000,
+                    source_type="execution",
+                )
                 final_output_comparison["consistent"] = consistent
                 final_output_comparison["verification_mode"] = (
                     "llm_verification" if consistent or not reason.startswith("LLM verification") else "llm_verification_error"
@@ -275,6 +345,7 @@ Return JSON only: {"consistent": boolean, "reason": string, "score": number}
             completed_at=datetime.now(UTC),
         )
 
+    # 执行回放或指定基线比对，基线由调用方传入，实际输出仍按最终 OpenAI LLM span 优先、original_response 兜底。
     async def detailed_compare_with_baseline(
         self,
         *,
@@ -312,16 +383,16 @@ Return JSON only: {"consistent": boolean, "reason": string, "score": number}
 
         error_message: str | None = None
         if invalid_range:
-            error_message = "Invalid LLM count range configuration"
+            error_message = "LLM 调用次数范围配置无效"
             final_output_comparison["reason"] = error_message
         elif not count_passed:
             final_output_comparison["reason"] = (
-                f"LLM call count {actual_count} is outside expected range {expected_min} to {expected_max}"
+                f"LLM 调用次数不符合预期，实际为 {actual_count} 次，期望范围为 {expected_min} ~ {expected_max} 次"
             )
         elif not final_output_comparison["baseline_output"]:
-            final_output_comparison["reason"] = "Baseline output is empty"
+            final_output_comparison["reason"] = "基线输出为空"
         elif not actual_output:
-            final_output_comparison["reason"] = "No final LLM output found"
+            final_output_comparison["reason"] = "未找到最终 LLM 输出"
         else:
             similarity = calculate_algorithm_similarity(actual_output, final_output_comparison["baseline_output"])
             final_output_comparison["algorithm_similarity"] = similarity
@@ -333,9 +404,26 @@ Return JSON only: {"consistent": boolean, "reason": string, "score": number}
                 prompt_template = (llm_model.comparison_prompt or DEFAULT_COMPARISON_PROMPT).strip()
                 prompt = prompt_template.replace("{{baseline_result}}", final_output_comparison["baseline_output"])
                 prompt = prompt.replace("{{actual_result}}", actual_output)
+                self._log_llm_verification_request(
+                    execution=execution,
+                    llm_model=llm_model,
+                    prompt=prompt,
+                    actual_output=actual_output,
+                    baseline_output=final_output_comparison["baseline_output"],
+                    source_type=source_type,
+                )
                 started_at = time.time()
                 consistent, reason = await self._verify_with_llm(prompt, actual_output, final_output_comparison["baseline_output"])
-                observe_llm_compare_duration(time.time() - started_at)
+                duration_seconds = time.time() - started_at
+                observe_llm_compare_duration(duration_seconds)
+                self._log_llm_verification_response(
+                    execution=execution,
+                    llm_model=llm_model,
+                    consistent=consistent,
+                    reason=reason,
+                    duration_ms=duration_seconds * 1000,
+                    source_type=source_type,
+                )
                 final_output_comparison["consistent"] = consistent
                 final_output_comparison["verification_mode"] = (
                     "llm_verification" if consistent or not reason.startswith("LLM verification") else "llm_verification_error"
