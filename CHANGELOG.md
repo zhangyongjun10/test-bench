@@ -1,5 +1,22 @@
 # 更新日志
 
+## 2026-04-17
+
+### 比对日志与排障
+- 新增比对模型请求结构化日志：当最终输出比对进入 LLM 语义判断时，会打印 `LLM comparison request payload`，包含 `execution_id`、`trace_id`、比对模型信息、`prompt`、`baseline_output`、`actual_output` 及长度，便于确认本次实际送给比对模型的内容。
+- 新增比对模型响应结构化日志：比对模型返回后会打印 `LLM comparison response payload`，包含 `consistent`、`reason`、`duration_ms` 和比对模型信息，方便和请求日志按 `execution_id`、`trace_id`、`task_id` 配对排查。
+- 优化全局 structlog 上下文：所有结构化日志自动补充稳定的进程内递增 `task_id`，不再使用 Python 对象内存地址，避免协程对象销毁后地址复用导致日志串联误判；日志中不再输出 `task_name`。
+- 保留最终输出的 `execution.original_response` fallback 逻辑，仅增加日志观测能力；如果最终 OpenAI LLM 文本 span 未被本次比对快照取到，日志可以直接看出 `actual_output` 是否来自 fallback。
+
+### 并发执行比对
+- 修复并发执行比对过早触发的问题：并发执行链路此前只要拉到任意 Trace span 就会进入比对，可能在最终 `provider == "openai"` 纯文本 LLM span 尚未可见时保存不完整快照，导致 `actual_count` 少算或 `actual_output` fallback 到 `execution.original_response`。
+- 并发执行现在复用普通执行的 Trace ready 规则：必须出现最后一个 `provider == "openai"` 的 LLM span，且该 span 能提取文本、没有 `tool_calls` / `function_call`，才进入比对；否则写入处理中比对记录并安排自动延迟比对。
+- 自动延迟比对任务补充可追踪日志上下文，并继续按 Trace ready 规则等待最终 OpenAI 文本输出，避免 Trace 异步写入窗口内误判。
+
+### 比对结果展示
+- 将 LLM 调用次数范围错误、次数不符合预期、基线为空、最终输出为空等用户可见比对原因改为中文；前端详情页同时兼容历史英文原因，展示时即时翻译为中文。
+- 执行详情页返回列表时保留来源列表 URL，执行列表的筛选条件、页码和每页条数会同步到 URL；从第二页进入详情再返回时，会回到原分页并避免 5 秒轮询刷新后跳回第一页。
+
 ## 2026-04-16
 
 ### 并发执行
