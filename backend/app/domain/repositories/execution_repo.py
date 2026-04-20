@@ -194,13 +194,14 @@ class SQLAlchemyExecutionRepository(ExecutionRepository):
         )
         return len(list(result.scalars().all()))
 
+    # 按保留期清理旧执行；必须复用单条删除逻辑，确保回放子执行、回放任务和比对结果外键都被一并清理。
     async def delete_old_data(self, days: int = 30) -> int:
         cutoff = datetime.now(UTC) - timedelta(days=days)
-        await self._delete_comparisons_for_old_executions(cutoff)
-        stmt = delete(ExecutionJob).where(ExecutionJob.created_at < cutoff)
-        result = await self.session.execute(stmt)
-        await self.session.commit()
-        return result.rowcount or 0
+        result = await self.session.execute(select(ExecutionJob.id).where(ExecutionJob.created_at < cutoff))
+        execution_ids = list(result.scalars().all())
+        for execution_id in execution_ids:
+            await self.delete(execution_id)
+        return len(execution_ids)
 
     async def get_by_batch_id(self, batch_id: str) -> List[ExecutionJob]:
         result = await self.session.execute(

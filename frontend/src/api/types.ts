@@ -1,27 +1,29 @@
+// 后端统一响应结构，所有业务接口通过 data 承载实际返回内容。
 export interface Response<T> {
   code: number
   message: string
   data: T
 }
 
+// Agent 列表与详情展示结构；Agent 不再暴露用户 Session，运行时会话由 execution 独立生成。
 export interface Agent {
   id: string
   name: string
   description?: string
   base_url: string
-  user_session?: string
   created_at: string
   updated_at: string
 }
 
+// 创建 Agent 的前端提交结构；仅包含连接配置，避免把会话状态绑定到 Agent 配置。
 export interface AgentCreate {
   name: string
   description?: string
   base_url: string
   api_key: string
-  user_session?: string
 }
 
+// 更新 Agent 的前端提交结构；沿用创建字段的局部更新能力，不包含用户 Session。
 export interface AgentUpdate extends Partial<AgentCreate> {}
 
 export interface LLMModel {
@@ -153,6 +155,11 @@ export interface ClickHouseConfigUpdate {
   username?: string
   password?: string
   source_type: string
+}
+
+// 前端运行时配置，来自后端系统配置接口，避免页面硬编码后端环境变量默认值。
+export interface RuntimeConfig {
+  concurrent_execution_max_concurrency: number
 }
 
 export interface TestResponse {

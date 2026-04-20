@@ -14,6 +14,9 @@ from app.core.logger import logger
 from app.domain.entities.comparison import ComparisonSourceType, ComparisonStatus
 from app.domain.entities.execution import ExecutionStatus
 from app.domain.entities.replay import ReplayTask
+from app.domain.repositories import comparison_repo as comparison_repo_module
+from app.domain.repositories import execution_repo as execution_repo_module
+from app.domain.repositories import scenario_repo as scenario_repo_module
 from app.domain.repositories.comparison_repo import SQLAlchemyComparisonRepository
 from app.domain.repositories.execution_repo import SQLAlchemyExecutionRepository
 from app.domain.repositories.scenario_repo import SQLAlchemyScenarioRepository
@@ -27,6 +30,9 @@ from app.models.execution import (
     ExecutionTraceResponse,
     SpanResponse,
 )
+from app.services import comparison as comparison_service_module
+from app.services import llm_service as llm_service_module
+from app.services import trace_fetcher as trace_fetcher_module
 from app.services.comparison import ComparisonService
 from app.services.concurrent_execution_service import ConcurrentExecutionService
 from app.services.execution_service import ExecutionService, count_openai_llm_spans, is_trace_ready_for_comparison
@@ -231,6 +237,7 @@ async def list_comparisons(execution_id: UUID, session: AsyncSession = Depends(g
     return Response[List[DetailedComparisonResponse]](data=items)
 
 
+# 在独立数据库 Session 中执行重新比对后台任务，避免复用请求生命周期内的 Session。
 async def run_recompare(execution_id: UUID, llm_model_id: UUID) -> None:
     from app.core.db import AsyncSessionLocal
 
@@ -238,6 +245,7 @@ async def run_recompare(execution_id: UUID, llm_model_id: UUID) -> None:
         await _run_recompare_with_session(session, execution_id, llm_model_id)
 
 
+# 执行重新比对的核心流程；Trace 等待规则与自动比对保持一致，避免手动比对提前读取未完整落库的 span。
 async def _run_recompare_with_session(session: AsyncSession, execution_id: UUID, llm_model_id: UUID) -> None:
     from datetime import UTC, datetime
 
@@ -249,20 +257,20 @@ async def _run_recompare_with_session(session: AsyncSession, execution_id: UUID,
         logger.error("Execution not found for recompare: %s", execution_id)
         return
 
-    scenario_repo = SQLAlchemyScenarioRepository(session)
+    scenario_repo = scenario_repo_module.SQLAlchemyScenarioRepository(session)
     scenario = await scenario_repo.get_by_id(execution.scenario_id)
     if not scenario:
         logger.error("Scenario not found for recompare: %s", execution.scenario_id)
         return
 
-    llm_service = LLMService(session)
+    llm_service = llm_service_module.LLMService(session)
     llm_model = await llm_service.get_llm(llm_model_id)
     if not llm_model:
         logger.error("LLM model not found for recompare: %s", llm_model_id)
         return
 
     llm_client = llm_service.get_client(llm_model)
-    comparison_repo = SQLAlchemyComparisonRepository()
+    comparison_repo = comparison_repo_module.SQLAlchemyComparisonRepository()
     comparison = ComparisonResult(
         execution_id=execution.id,
         scenario_id=scenario.id,
@@ -280,7 +288,7 @@ async def _run_recompare_with_session(session: AsyncSession, execution_id: UUID,
     await comparison_repo.create(session, comparison)
     await session.commit()
 
-    trace_fetcher = TraceFetcherImpl(session)
+    trace_fetcher = trace_fetcher_module.TraceFetcherImpl(session)
     spans = []
     retry_delays = [0, 2, 4, 8, 15, 30]
     expected_min_llm_count = scenario.llm_count_min or 0
@@ -300,7 +308,7 @@ async def _run_recompare_with_session(session: AsyncSession, execution_id: UUID,
         )
 
     try:
-        comparison_service = ComparisonService(llm_client, comparison_repo)
+        comparison_service = comparison_service_module.ComparisonService(llm_client, comparison_repo)
         completed_comparison = await comparison_service.detailed_compare(
             scenario=scenario,
             execution=execution,
@@ -332,13 +340,14 @@ async def _run_recompare_with_session(session: AsyncSession, execution_id: UUID,
 
 
 @router.post("/{execution_id}/recompare")
+# 触发手动重新比对，接口只负责校验执行和比对模型存在，实际比对放入后台任务执行。
 async def trigger_recompare(
     execution_id: UUID,
     background_tasks: BackgroundTasks,
     llm_model_id: UUID = Query(...),
     session: AsyncSession = Depends(get_db),
 ) -> Response[RecompareResponse]:
-    execution_repo = SQLAlchemyExecutionRepository(session)
+    execution_repo = execution_repo_module.SQLAlchemyExecutionRepository(session)
     execution = await execution_repo.get_by_id(execution_id)
     if not execution:
         return Response(code=404, message="Execution not found", data=None)

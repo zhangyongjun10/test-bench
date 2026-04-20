@@ -21,6 +21,7 @@ import type {
   ReplayHistoryData,
   ReplayTask,
   Response,
+  RuntimeConfig,
   Scenario,
   ScenarioCreate,
   ScenarioUpdate,
@@ -116,6 +117,7 @@ export const scenarioApiExtended = {
 }
 
 export const systemApi = {
+  getRuntimeConfig: () => asResponse<RuntimeConfig>(request.get('/v1/system/runtime-config')),
   getClickhouse: () => asResponse<ClickHouseConfig>(request.get('/v1/system/clickhouse')),
   updateClickhouse: (data: ClickHouseConfigUpdate) =>
     asResponse<ClickHouseConfig>(request.post('/v1/system/clickhouse', data)),

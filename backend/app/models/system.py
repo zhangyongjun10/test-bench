@@ -31,3 +31,9 @@ class ClickHouseTestResponse(BaseModel):
 
     success: bool
     message: str
+
+
+# 前端运行时配置响应，只暴露非敏感配置，避免前端硬编码后端运行参数。
+class RuntimeConfigResponse(BaseModel):
+    # 并发执行单批次最大 Agent 调用数；前端只用于输入限制和提示，后端仍做最终硬校验。
+    concurrent_execution_max_concurrency: int

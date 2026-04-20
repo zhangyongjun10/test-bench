@@ -1,7 +1,7 @@
 """单元测试：比对服务核心功能"""
 
 import json
-from app.services.comparison import levenshtein_similarity, normalize_json_content, truncate_content
+from app.services.comparison import levenshtein_similarity, normalize_json_content
 
 
 class TestLevenshteinSimilarity:
@@ -76,22 +76,6 @@ class TestNormalizeJsonContent:
     def test_empty_string(self):
         """空字符串处理正确"""
         assert normalize_json_content("") == ""
-
-
-class TestTruncateContent:
-    """测试超长内容截断"""
-
-    def test_short_content_not_truncated(self):
-        """短内容不截断"""
-        content = "short content"
-        assert truncate_content(content) == content
-
-    def test_long_content_truncated(self):
-        """长内容截断并添加标记"""
-        content = "x" * 10000
-        result = truncate_content(content)
-        assert len(result) < 10000
-        assert "[...truncated]" in result
 
 
 class TestJsonNormalizationIntegration:

@@ -9,13 +9,26 @@ from app.models.common import Response
 from app.models.system import (
     ClickHouseConfigUpdate,
     ClickHouseConfigResponse,
-    ClickHouseTestResponse
+    ClickHouseTestResponse,
+    RuntimeConfigResponse,
 )
+from app.config import settings
 from app.domain.entities.system import SystemClickhouseConfig
 from app.clients.clickhouse_client import ClickHouseClient
 
 
+# 系统配置路由，集中处理运行时配置和 ClickHouse 连接配置。
 router = APIRouter(prefix="/api/v1/system", tags=["system"])
+
+
+# 获取前端运行时需要的非敏感系统配置，避免前端重复维护后端环境变量默认值。
+@router.get("/runtime-config")
+async def get_runtime_config() -> Response[RuntimeConfigResponse]:
+    return Response[RuntimeConfigResponse](
+        data=RuntimeConfigResponse(
+            concurrent_execution_max_concurrency=settings.concurrent_execution_max_concurrency
+        )
+    )
 
 
 @router.get("/clickhouse")

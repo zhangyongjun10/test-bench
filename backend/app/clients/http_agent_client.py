@@ -20,9 +20,11 @@ def _format_exception_message(exc: Exception) -> str:
     return exc.__class__.__name__
 
 
+# Agent HTTP 调用客户端，负责按 OpenAI Chat Completions 兼容协议组装请求并注入 execution 级会话。
 class HTTPAgentClient:
     """HTTP client for invoking OpenAI-compatible agent endpoints."""
 
+    # 初始化 Agent 客户端；user_session 仅接收 execution 级会话，不再来源于 Agent 配置。
     def __init__(
         self,
         base_url: str,
@@ -55,6 +57,7 @@ class HTTPAgentClient:
             return f"{self.base_url}/v1/chat/completions"
         return self.base_url
 
+    # 构建 OpenClaw Chat Completions 请求体，Agent 执行默认固定使用 openclaw:main，页面选择的 LLM 模型只用于后续比对。
     def _build_payload(
         self,
         prompt: str,
@@ -70,6 +73,7 @@ class HTTPAgentClient:
             payload["user"] = effective_user_session
         return payload
 
+    # 测试 Agent 端点是否可用；缺省时生成临时 test 会话，避免污染真实执行上下文。
     async def test_connection(self, model: str = "openclaw:main", user_session: str | None = None) -> tuple[bool, str]:
         request_url = self._build_request_url()
         effective_user_session = user_session if user_session is not None else (self.user_session or f"test_{uuid.uuid4().hex}")
@@ -97,6 +101,7 @@ class HTTPAgentClient:
             logger.error("Agent connection test failed: %s", message)
             return False, message
 
+    # 调用 Agent HTTP 接口执行场景，默认 model 保持 openclaw:main，避免把比对模型误传给 Agent。
     async def invoke(
         self,
         prompt: str,

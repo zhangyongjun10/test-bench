@@ -16,6 +16,7 @@ from app.services.execution_service import (
 )
 
 
+# 验证 Agent 请求体默认使用 openclaw:main，并从 execution 级会话注入 user 字段。
 def test_http_agent_client_builds_openclaw_payload_with_user():
     client = HTTPAgentClient(
         base_url="https://agent.example.com/chat",
@@ -23,7 +24,7 @@ def test_http_agent_client_builds_openclaw_payload_with_user():
         user_session="exec_abc",
     )
 
-    payload = client._build_payload("hello", "exec_abc")
+    payload = client._build_payload("hello", user_session="exec_abc")
 
     assert payload == {
         "model": "openclaw:main",

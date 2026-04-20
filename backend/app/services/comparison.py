@@ -22,8 +22,9 @@ from app.domain.repositories.comparison_repo import ComparisonRepository
 from app.models.execution import ComparisonResult
 from app.models.llm import DEFAULT_COMPARISON_PROMPT
 
+# LLM 比对解析失败时的最大重试次数，避免模型偶发非 JSON 输出导致立即失败。
 MAX_RETRIES = 3
-MAX_CONTENT_LENGTH = 8000
+# 算法粗筛直通阈值，达到该相似度时可跳过 LLM 语义比对。
 ALGORITHM_PASS_THRESHOLD = 0.9
 
 
@@ -48,12 +49,6 @@ def normalize_json_content(content: str) -> str:
     except json.JSONDecodeError:
         return content
     return json.dumps(parsed, sort_keys=True, ensure_ascii=False)
-
-
-def truncate_content(content: str) -> str:
-    if len(content) <= MAX_CONTENT_LENGTH:
-        return content
-    return content[: MAX_CONTENT_LENGTH - 10] + "\n[...truncated]"
 
 
 def calculate_algorithm_similarity(actual: str, baseline: str) -> float:
@@ -151,6 +146,7 @@ def extract_final_llm_content(llm_spans: list[Span]) -> str:
 class ComparisonService:
     """LLM-only comparison service."""
 
+    # LLM 语义比对提示词模板，要求比对模型只返回可解析 JSON，避免自由文本影响结果落库。
     RESULT_COMPARE_PROMPT = """Compare whether the baseline output and actual output are semantically consistent.
 
 Baseline:
@@ -162,16 +158,24 @@ Actual:
 Return JSON only: {"consistent": boolean, "reason": string, "score": number}
 """
 
+    # 初始化比对服务，llm_client 负责语义判断，comparison_repo 用于可选的比对结果持久化。
     def __init__(self, llm_client: LLMClient, comparison_repo: Optional[ComparisonRepository] = None):
         self.llm_client = llm_client
         self.comparison_repo = comparison_repo
 
+    # 过滤可参与 LLM 次数统计和最终输出提取的 span，优先只取 provider=openai 的真实模型调用。
     @staticmethod
     def _get_comparable_llm_spans(trace_spans: list[Span]) -> list[Span]:
         llm_spans = [span for span in trace_spans if (span.span_type or "").lower() == "llm"]
         openai_spans = [span for span in llm_spans if (span.provider or "").lower() == "openai"]
         return openai_spans or llm_spans
 
+    # 判断 LLM 语义比对是否因比对模型调用异常失败，用于区分“业务语义不一致”和“比对链路异常”。
+    @staticmethod
+    def _is_llm_verification_error(reason: str) -> bool:
+        return reason.startswith("LLM verification") or reason.startswith("LLM 语义比对")
+
+    # 调用比对模型执行语义判断；模型超时或连续解析失败时返回失败原因而不是抛出异常阻断执行链路。
     async def _verify_with_llm(self, prompt: str, actual_output: str, baseline_output: str) -> tuple[bool, str]:
         last_error: Exception | None = None
         for attempt in range(MAX_RETRIES):
@@ -185,8 +189,8 @@ Return JSON only: {"consistent": boolean, "reason": string, "score": number}
                 await asyncio.sleep(2**attempt)
         logger.warning("LLM verification failed after retries: %s", last_error)
         if isinstance(last_error, httpx.TimeoutException):
-            return False, f"LLM verification timed out after {MAX_RETRIES} retries"
-        return False, f"LLM verification failed: {last_error}" if last_error else "LLM verification failed"
+            return False, f"LLM 语义比对超时，已重试 {MAX_RETRIES} 次"
+        return False, f"LLM 语义比对失败：{last_error}" if last_error else "LLM 语义比对失败"
 
     # 记录最终发送给比对模型的请求内容，方便排查 actual_output 是否来自最终 LLM span 或 original_response fallback。
     @staticmethod
@@ -284,7 +288,7 @@ Return JSON only: {"consistent": boolean, "reason": string, "score": number}
         elif not baseline_output:
             final_output_comparison["reason"] = "场景基线输出为空"
         elif not actual_output:
-            final_output_comparison["reason"] = "未找到最终 LLM 输出"
+            final_output_comparison["reason"] = "Trace 中没有找到最终 LLM 输出"
         else:
             similarity = calculate_algorithm_similarity(actual_output, baseline_output)
             final_output_comparison["algorithm_similarity"] = similarity
@@ -318,7 +322,7 @@ Return JSON only: {"consistent": boolean, "reason": string, "score": number}
                 )
                 final_output_comparison["consistent"] = consistent
                 final_output_comparison["verification_mode"] = (
-                    "llm_verification" if consistent or not reason.startswith("LLM verification") else "llm_verification_error"
+                    "llm_verification" if consistent or not self._is_llm_verification_error(reason) else "llm_verification_error"
                 )
                 final_output_comparison["reason"] = reason
 
@@ -392,7 +396,7 @@ Return JSON only: {"consistent": boolean, "reason": string, "score": number}
         elif not final_output_comparison["baseline_output"]:
             final_output_comparison["reason"] = "基线输出为空"
         elif not actual_output:
-            final_output_comparison["reason"] = "未找到最终 LLM 输出"
+            final_output_comparison["reason"] = "Trace 中没有找到最终 LLM 输出"
         else:
             similarity = calculate_algorithm_similarity(actual_output, final_output_comparison["baseline_output"])
             final_output_comparison["algorithm_similarity"] = similarity
@@ -426,7 +430,7 @@ Return JSON only: {"consistent": boolean, "reason": string, "score": number}
                 )
                 final_output_comparison["consistent"] = consistent
                 final_output_comparison["verification_mode"] = (
-                    "llm_verification" if consistent or not reason.startswith("LLM verification") else "llm_verification_error"
+                    "llm_verification" if consistent or not self._is_llm_verification_error(reason) else "llm_verification_error"
                 )
                 final_output_comparison["reason"] = reason
 
@@ -456,11 +460,12 @@ Return JSON only: {"consistent": boolean, "reason": string, "score": number}
             completed_at=datetime.now(UTC),
         )
 
+    # 兼容旧版直接比对入口；这里必须使用完整内容，不再截断基线或实际输出。
     async def compare(self, question: str, actual: str, baseline: str) -> ComparisonResult:
         del question
         prompt = self.RESULT_COMPARE_PROMPT.format(
-            baseline=truncate_content(normalize_json_content(baseline)),
-            actual=truncate_content(normalize_json_content(extract_llm_content(actual))),
+            baseline=normalize_json_content(baseline),
+            actual=normalize_json_content(extract_llm_content(actual)),
         )
         started_at = time.time()
         last_error: Exception | None = None

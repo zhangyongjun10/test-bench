@@ -10,11 +10,13 @@ from app.models.agent import AgentCreate, AgentUpdate
 from app.core.logger import logger
 
 
+# Agent 管理服务，负责连接配置的增删改查与连通性测试，不保存或使用 Agent 级会话状态。
 class AgentService:
     def __init__(self, session: AsyncSession):
         self.repo: AgentRepository = SQLAlchemyAgentRepository(session)
         self.session = session
 
+    # 创建 Agent 连接配置；Session 不属于 Agent 配置，执行时由 execution 独立生成。
     async def create_agent(self, request: AgentCreate) -> Agent:
         """创建 Agent"""
         agent = Agent(
@@ -22,12 +24,12 @@ class AgentService:
             description=request.description,
             base_url=request.base_url.rstrip("/"),
             api_key_encrypted=encryption_service.encrypt(request.api_key),
-            user_session=request.user_session
         )
         result = await self.repo.create(agent)
         logger.info(f"Created agent: {result.id} name={result.name}")
         return result
 
+    # 更新 Agent 连接配置；只更新显式传入字段，且不支持写入用户 Session。
     async def update_agent(self, agent_id: UUID, request: AgentUpdate) -> Optional[Agent]:
         """更新 Agent"""
         agent = await self.repo.get_by_id(agent_id)
@@ -42,8 +44,6 @@ class AgentService:
             agent.base_url = request.base_url.rstrip("/")
         if request.api_key is not None:
             agent.api_key_encrypted = encryption_service.encrypt(request.api_key)
-        if request.user_session is not None:
-            agent.user_session = request.user_session
 
         result = await self.repo.update(agent)
         logger.info(f"Updated agent: {agent_id}")
@@ -66,6 +66,7 @@ class AgentService:
         """列出 Agent"""
         return await self.repo.list_all(keyword)
 
+    # 测试 Agent HTTP 连通性；使用临时测试会话，避免复用历史执行上下文。
     async def test_connection(self, agent_id: UUID) -> tuple[bool, str]:
         """测试 Agent 连接"""
         from app.clients.http_agent_client import HTTPAgentClient
@@ -74,7 +75,7 @@ class AgentService:
             return False, "Agent not found"
 
         api_key = encryption_service.decrypt(agent.api_key_encrypted)
-        client = HTTPAgentClient(agent.base_url, api_key, user_session=agent.user_session)
+        client = HTTPAgentClient(agent.base_url, api_key)
         try:
             success, test_message = await client.test_connection()
             if success:

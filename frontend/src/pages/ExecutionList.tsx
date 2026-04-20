@@ -4,7 +4,7 @@ import { DeleteOutlined, EyeOutlined, PlusOutlined, RetweetOutlined } from '@ant
 import type { ColumnsType } from 'antd/es/table'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 
-import { agentApi, executionApi, llmApi, replayApi, scenarioApi } from '../api/client'
+import { agentApi, executionApi, llmApi, replayApi, scenarioApi, systemApi } from '../api/client'
 import type {
   Agent,
   CreateConcurrentExecutionRequest,
@@ -93,6 +93,7 @@ const ExecutionList = () => {
   const [replayModalVisible, setReplayModalVisible] = useState(false)
   const [replaySubmitting, setReplaySubmitting] = useState(false)
   const [selectedReplayExecution, setSelectedReplayExecution] = useState<ExecutionJob | null>(null)
+  const [concurrentExecutionMaxConcurrency, setConcurrentExecutionMaxConcurrency] = useState<number | null>(null)
   const [form] = Form.useForm<ExecutionFormValues>()
   const [replayForm] = Form.useForm()
 
@@ -146,6 +147,12 @@ const ExecutionList = () => {
     setLlms(res.data || [])
   }
 
+  // 从后端读取前端运行时配置；并发上限以后只需要改后端环境变量，不需要重新改页面常量。
+  const loadRuntimeConfig = async () => {
+    const res = await systemApi.getRuntimeConfig()
+    setConcurrentExecutionMaxConcurrency(res.data.concurrent_execution_max_concurrency)
+  }
+
   const loadExecutions = async (
     page = currentPage,
     size = pageSize,
@@ -165,7 +172,7 @@ const ExecutionList = () => {
   }
 
   useEffect(() => {
-    void Promise.all([loadAgents(), loadScenarios(), loadLlms()]).catch((error: any) => {
+    void Promise.all([loadAgents(), loadScenarios(), loadLlms(), loadRuntimeConfig()]).catch((error: any) => {
       message.error(error.message)
     })
   }, [])
@@ -224,6 +231,12 @@ const ExecutionList = () => {
           scenario_id: values.scenario_id,
           llm_model_id: values.llm_model_id,
           agent_id: values.agent_id,
+        }
+        if (concurrentExecutionMaxConcurrency === null) {
+          throw new Error('系统运行配置加载中，请稍后再试')
+        }
+        if (payload.concurrency > concurrentExecutionMaxConcurrency) {
+          throw new Error(`并发数超过系统上限，当前上限为 ${concurrentExecutionMaxConcurrency}`)
         }
         await executionApi.createConcurrent(payload)
         message.success('并发执行已启动')
@@ -455,8 +468,21 @@ const ExecutionList = () => {
             {({ getFieldValue }) =>
               getFieldValue('mode') === 'concurrent' ? (
                 <>
-                  <Form.Item name="concurrency" label="并发数" rules={[{ required: true, message: '请输入并发数' }]}>
-                    <InputNumber min={1} style={{ width: '100%' }} />
+                  <Form.Item
+                    name="concurrency"
+                    label="并发数"
+                    extra={
+                      concurrentExecutionMaxConcurrency === null
+                        ? '正在读取系统并发上限'
+                        : `当前系统上限：${concurrentExecutionMaxConcurrency}`
+                    }
+                    rules={[{ required: true, message: '请输入并发数' }]}
+                  >
+                    <InputNumber
+                      min={1}
+                      max={concurrentExecutionMaxConcurrency ?? undefined}
+                      style={{ width: '100%' }}
+                    />
                   </Form.Item>
                 </>
               ) : null

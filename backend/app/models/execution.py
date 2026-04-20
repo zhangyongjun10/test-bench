@@ -11,7 +11,8 @@ class CreateExecutionRequest(BaseModel):
 
     agent_id: UUID
     scenario_id: UUID
-    llm_model_id: UUID | None = None
+    # 创建执行时必须指定比对模型，保证执行完成后可以进入统一的 LLM-only 比对流程。
+    llm_model_id: UUID
 
 
 class ExecutionResponse(BaseModel):
@@ -77,7 +78,8 @@ class ConcurrentExecutionRequest(BaseModel):
     input: str = Field(..., min_length=1)
     concurrency: int = Field(..., ge=1)
     scenario_id: UUID | None = None
-    llm_model_id: UUID | None = None
+    # 创建执行时必须指定比对模型，保证执行完成后可以进入统一的 LLM-only 比对流程。
+    llm_model_id: UUID
     agent_id: UUID | None = None
 
 

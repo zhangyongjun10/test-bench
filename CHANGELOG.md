@@ -1,5 +1,46 @@
 # 更新日志
 
+## 2026-04-20
+
+### 并发执行状态机加固
+- 新增 `execution_batches` 批次表和迁移 `0012_add_execution_batches`，持久化记录请求并发数、准备成功数、启动成功数、准备失败数、启动标记失败数和统一 Agent 调用时间。
+- 重构并发执行单路结果为明确状态对象，覆盖准备失败、启动标记失败、Agent 失败、延迟比对、比对失败、完成和比对未通过，避免 `asyncio.gather` 子任务异常被静默吞掉。
+- 修复 Agent client 构建、API key 解密、外层 Session 创建等异常无法回写 execution 的问题：只要 execution 已创建，后续任意异常都会收口为 `failed` 并写入错误原因。
+- 修复 Trace 未 ready 时主流程误标 `completed` 的问题：首次比对返回延迟状态时 execution 保持 `comparing`，等待自动延迟比对成功后再进入最终完成状态。
+- 优化批次状态接口：`queued`、`running`、`pulling_trace`、`comparing` 都计入运行中；不存在的批次返回 `not_found`；存在失败时返回 `completed_with_failures`。
+- 新增 `CONCURRENT_EXECUTION_MAX_CONCURRENCY` 后端硬上限，默认 `200`；前端并发输入同步限制为 `200`，后端仍做最终校验并返回中文错误。
+- 新增 `GET /api/v1/system/runtime-config` 运行时配置接口，前端并发输入上限改为读取后端配置，不再单独维护并发上限常量；后续只需修改后端 `CONCURRENT_EXECUTION_MAX_CONCURRENCY`。
+- 更新 `.env.example`，补齐 Agent 超时、数据库连接池、数据库写入并发和单批次最大并发配置。
+- 补充并发执行边界测试，覆盖 client 构建失败收口、Trace 延迟比对不误标完成、批次非终态统计和超过最大并发拦截。
+
+### 并发执行比对
+- 新增数据库连接池配置项：`DB_POOL_SIZE`、`DB_MAX_OVERFLOW`、`DB_POOL_TIMEOUT`、`DB_POOL_RECYCLE_SECONDS`，避免继续使用 SQLAlchemy 默认 `5 + 10 overflow` 的固定小连接池。
+- 新增并发执行数据库访问限流：`CONCURRENT_EXECUTION_DB_CONCURRENCY` 控制并发执行链路同一时刻进入数据库读写区的协程数，Agent HTTP 并发与 DB 并发解耦，避免几十到上百并发场景把连接池瞬间打满。
+- 调整并发执行启动方式为两阶段：先按 DB 限流准备所有 execution 记录，再一次性启动 OpenClaw HTTP 调用，确保页面选择 100 并发时不会因为 DB 写入限流变成分批 20 路调用 OpenClaw。
+- 并发批次内 execution 会在所有记录准备完成后，使用真正即将统一调用 Agent 的时间回写 `created_at`、`updated_at`、`started_at`，避免页面时间显示为 DB 准备阶段的分批时间。
+- 修复并发执行长时间占用数据库连接的问题：后台批次读取 Agent 后立即释放请求 Session，每一路执行只在落库/查询时短暂使用数据库连接，Agent HTTP 调用、Trace 轮询等待、LLM 比对前都会释放连接，避免高并发或长任务把 SQLAlchemy 连接池打满。
+- 修复自动延迟比对重试耗尽后状态不收口的问题：当 Trace 多次重试后仍不可用，或比对逻辑未能完成时，会将 execution 标记为 `failed`，并写入中文错误信息，避免页面长时间停留在“比对中”。
+- 修复自动延迟比对失败原因不准确的问题：现在会区分“完全没有 Trace spans”和“Trace 已存在但长时间没有最终 OpenAI 纯文本输出”，避免把工具调用未结束误报为未找到 Trace。
+- 自动延迟比对新增顶层异常兜底：后台任务出现未预期异常时会记录错误日志，并同步将 execution 与对应 comparison 记录标记为失败态，避免协程异常导致状态悬挂。
+- 自动延迟比对失败时会同步更新 `comparison_results`：已有处理中比对记录会改为 `failed` 并写入 `error_message`、`completed_at`；如果不存在比对记录，则创建一条失败比对记录，保证前端可以看到失败原因。
+
+### 比对逻辑
+- 移除历史内容截断逻辑：算法粗筛和 LLM 语义比对都会使用完整基线输出与完整实际输出，不再按固定长度截断。
+- LLM 语义比对超时和调用失败原因改为中文提示，并继续归类为 `llm_verification_error`，避免把比对模型异常误展示成普通语义不一致。
+- 重新比对后台流程保持可替换的仓储、Trace 拉取和比对服务入口，保证接口校验、后台执行和测试替身走同一套依赖路径。
+
+### 执行清理
+- 清理旧执行数据时改为复用单条执行删除逻辑，逐条清理回放子执行、回放任务和比对结果，避免批量删除绕过外键依赖处理。
+
+### 日志输出
+- 修复文件日志包含 ANSI 颜色控制字符导致打开像乱码的问题：控制台保留彩色输出，`logs/info.*.log` 和 `logs/error.*.log` 强制使用无颜色纯文本渲染。
+- 修复日志文件日期长期停留在服务启动日的问题：文件日志改为按北京时间动态写入 `logs/info.YYYY-MM-DD.log` 和 `logs/error.YYYY-MM-DD.log`，不再生成 `info.启动日.log.轮转日.log` 这类混乱文件名。
+
+### Agent 会话隔离
+- 清理 Agent 级 `user_session` 运行时残留：Agent 创建、更新、响应和连通性测试不再读写或使用 Agent 配置里的 Session；正式执行统一使用 execution 级 `exec_{execution_id}` 会话，并发执行每一路显式传入独立 execution session。
+- 清理 Agent 实体、接口模型、前端类型和并发执行测试中的 Agent Session 残留，并新增数据库迁移 `0011_drop_agent_user_session` 删除 `agents.user_session` 历史字段。
+- 保留 `HTTPAgentClient` 的 `user_session` 入参与随机兜底，仅用于 execution 级调用覆盖和防御性会话隔离；前端 Agent 类型不再暴露 `user_session` 字段。
+
 ## 2026-04-17
 
 ### 比对日志与排障
