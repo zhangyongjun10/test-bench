@@ -1,7 +1,5 @@
 """日志配置。"""
 
-import asyncio
-import itertools
 import os
 import logging
 import structlog
@@ -12,9 +10,6 @@ from datetime import datetime
 
 # 设置日志时区为北京时间，保证终端、文件和页面排障时间一致。
 BEIJING_TZ = pytz.timezone("Asia/Shanghai")
-
-# 为 asyncio Task 分配进程内递增 ID，避免使用内存地址导致 Task 销毁后复用而混淆日志。
-TASK_ID_COUNTER = itertools.count(1)
 
 # 确保日志目录存在，避免应用启动时文件 handler 创建失败。
 os.makedirs("logs", exist_ok=True)
@@ -52,29 +47,14 @@ def add_beijing_timestamp(_, __, event_dict):
     event_dict["timestamp"] = datetime.now(BEIJING_TZ).isoformat()
     return event_dict
 
-# 给 structlog 事件补充稳定的 asyncio 协程 ID，用于并发执行下串联同一路请求日志。
-def add_asyncio_task_context(_, __, event_dict):
-    try:
-        task = asyncio.current_task()
-    except RuntimeError:
-        task = None
-    if task:
-        task_id = getattr(task, "_testbench_task_id", None)
-        if task_id is None:
-            task_id = f"task-{next(TASK_ID_COUNTER)}"
-            setattr(task, "_testbench_task_id", task_id)
-        event_dict["task_id"] = task_id
-    return event_dict
-
 # 配置根日志器，structlog 最终也会写入这里绑定的终端和文件 handler。
 root_logger = logging.getLogger()
 root_logger.setLevel(logging.INFO)
 root_logger.handlers.clear()
 
-# structlog 通用预处理链，控制台和文件都会补齐北京时间、协程 ID 和日志级别。
+# structlog 通用预处理链，控制台和文件都会补齐北京时间和日志级别。
 shared_processors = [
     add_beijing_timestamp,
-    add_asyncio_task_context,
     structlog.processors.add_log_level,
 ]
 

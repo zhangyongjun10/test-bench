@@ -256,17 +256,25 @@ const extractDisplayOutput = (output?: string) => {
 }
 
 const extractLLMMessages = (span: ExecutionTrace['spans'][number]) => {
-  const messages: Array<{ role: string; content: string; toolCalls?: Array<{ name: string; content: string }> }> = []
+  const messages: Array<{
+    role: string
+    content: string
+    toolCalls?: Array<{ name: string; content: string }>
+    finishReason?: string
+    showWhenEmpty?: boolean
+  }> = []
 
   const pushMessage = (
     role: string,
     content?: string | null,
     toolCalls?: Array<{ name: string; content: string }>,
+    finishReason?: string,
+    showWhenEmpty?: boolean,
   ) => {
     const text = (content || '').trim()
     const calls = toolCalls || []
-    if (!text && calls.length === 0) return
-    messages.push({ role, content: text, toolCalls: calls })
+    if (!text && calls.length === 0 && !showWhenEmpty) return
+    messages.push({ role, content: text, toolCalls: calls, finishReason, showWhenEmpty })
   }
 
   if (span.input) {
@@ -301,10 +309,11 @@ const extractLLMMessages = (span: ExecutionTrace['spans'][number]) => {
         const firstChoice = parsedOutput.choices[0]
         if (firstChoice && typeof firstChoice === 'object' && 'message' in firstChoice) {
           const message = firstChoice.message
+          const finishReason = typeof firstChoice.finish_reason === 'string' ? firstChoice.finish_reason : undefined
           const toolCalls =
             message && typeof message === 'object' && 'tool_calls' in message ? extractToolCalls(message.tool_calls) : []
           const content = toolCalls.length > 0 ? extractMessageTextOnly(message) : extractMessageBody(message)
-          pushMessage('assistant', content, toolCalls)
+          pushMessage('assistant', content, toolCalls, finishReason, true)
           outputHandled = true
         }
       }
@@ -455,10 +464,24 @@ const TracePanel = ({ title, trace, loading }: { title: string; trace: Execution
                                   ),
                                   children: (
                                     <div style={{ display: 'grid', gap: 10 }}>
-                                      {messageItem.content && (
+                                      {messageItem.content ? (
                                         <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                                           {messageItem.content}
                                         </pre>
+                                      ) : !messageItem.toolCalls?.length ? (
+                                        <div
+                                          style={{
+                                            color: '#8c8c8c',
+                                            fontStyle: 'italic',
+                                          }}
+                                        >
+                                          空响应
+                                        </div>
+                                      ) : null}
+                                      {messageItem.finishReason && (
+                                        <div style={{ color: '#64748b', fontSize: 13 }}>
+                                          Finish reason: {messageItem.finishReason}
+                                        </div>
                                       )}
                                       {messageItem.toolCalls?.map((toolCall, toolIndex) => (
                                         <div
