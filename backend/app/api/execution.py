@@ -35,7 +35,11 @@ from app.services import llm_service as llm_service_module
 from app.services import trace_fetcher as trace_fetcher_module
 from app.services.comparison import ComparisonService
 from app.services.concurrent_execution_service import ConcurrentExecutionService
-from app.services.execution_service import ExecutionService, count_openai_llm_spans, is_trace_ready_for_comparison
+from app.services.execution_service import (
+    ExecutionService,
+    count_openai_llm_spans,
+    is_trace_ready_for_comparison,
+)
 from app.services.llm_service import LLMService
 from app.services.trace_fetcher import TraceFetcherImpl
 
@@ -44,7 +48,11 @@ router = APIRouter(prefix="/api/v1/execution", tags=["execution"])
 
 
 @router.post("")
-async def create_execution(request: CreateExecutionRequest, background_tasks: BackgroundTasks, session: AsyncSession = Depends(get_db)) -> Response[UUID]:
+async def create_execution(
+    request: CreateExecutionRequest,
+    background_tasks: BackgroundTasks,
+    session: AsyncSession = Depends(get_db),
+) -> Response[UUID]:
     try:
         service = ExecutionService(session)
         execution_id = await service.create_execution(request, background_tasks)
@@ -85,7 +93,10 @@ async def list_executions(
 
 
 @router.get("/{execution_id}")
-async def get_execution(execution_id: UUID, session: AsyncSession = Depends(get_db)) -> Response[ExecutionResponse]:
+async def get_execution(
+    execution_id: UUID,
+    session: AsyncSession = Depends(get_db),
+) -> Response[ExecutionResponse]:
     service = ExecutionService(session)
     execution = await service.get_execution(execution_id)
     if not execution:
@@ -94,7 +105,10 @@ async def get_execution(execution_id: UUID, session: AsyncSession = Depends(get_
 
 
 @router.get("/{execution_id}/trace")
-async def get_trace(execution_id: UUID, session: AsyncSession = Depends(get_db)) -> Response[ExecutionTraceResponse]:
+async def get_trace(
+    execution_id: UUID,
+    session: AsyncSession = Depends(get_db),
+) -> Response[ExecutionTraceResponse]:
     service = ExecutionService(session)
     execution = await service.get_execution(execution_id)
     if not execution:
@@ -118,11 +132,16 @@ async def get_trace(execution_id: UUID, session: AsyncSession = Depends(get_db))
         )
         for span in spans
     ]
-    return Response[ExecutionTraceResponse](data=ExecutionTraceResponse(trace_id=execution.trace_id, spans=span_responses))
+    return Response[ExecutionTraceResponse](
+        data=ExecutionTraceResponse(trace_id=execution.trace_id, spans=span_responses)
+    )
 
 
 @router.delete("/{execution_id}")
-async def delete_execution(execution_id: UUID, session: AsyncSession = Depends(get_db)) -> Response[None]:
+async def delete_execution(
+    execution_id: UUID,
+    session: AsyncSession = Depends(get_db),
+) -> Response[None]:
     service = ExecutionService(session)
     success = await service.delete_execution(execution_id)
     if not success:
@@ -131,13 +150,21 @@ async def delete_execution(execution_id: UUID, session: AsyncSession = Depends(g
 
 
 @router.get("/{execution_id}/comparison")
-async def get_comparison(execution_id: UUID, session: AsyncSession = Depends(get_db)) -> Response[DetailedComparisonResponse]:
+async def get_comparison(
+    execution_id: UUID,
+    session: AsyncSession = Depends(get_db),
+) -> Response[DetailedComparisonResponse]:
     comparison_repo = SQLAlchemyComparisonRepository()
     comparison = await comparison_repo.get_by_execution_id(session, execution_id)
     if not comparison:
         return Response(code=404, message="Comparison not found", data=None)
 
-    details: Dict[str, Any] = {"tool_comparisons": [], "llm_comparison": None, "llm_count_check": None, "final_output_comparison": None}
+    details: Dict[str, Any] = {
+        "tool_comparisons": [],
+        "llm_comparison": None,
+        "llm_count_check": None,
+        "final_output_comparison": None,
+    }
     if comparison.details_json:
         try:
             details = json.loads(comparison.details_json)
@@ -183,13 +210,21 @@ async def get_comparison(execution_id: UUID, session: AsyncSession = Depends(get
 
 
 @router.get("/{execution_id}/comparisons")
-async def list_comparisons(execution_id: UUID, session: AsyncSession = Depends(get_db)) -> Response[List[DetailedComparisonResponse]]:
+async def list_comparisons(
+    execution_id: UUID,
+    session: AsyncSession = Depends(get_db),
+) -> Response[List[DetailedComparisonResponse]]:
     comparison_repo = SQLAlchemyComparisonRepository()
     comparisons = await comparison_repo.list_by_execution_id(session, execution_id)
 
     items: List[DetailedComparisonResponse] = []
     for comparison in comparisons:
-        details: Dict[str, Any] = {"tool_comparisons": [], "llm_comparison": None, "llm_count_check": None, "final_output_comparison": None}
+        details: Dict[str, Any] = {
+            "tool_comparisons": [],
+            "llm_comparison": None,
+            "llm_count_check": None,
+            "final_output_comparison": None,
+        }
         if comparison.details_json:
             try:
                 details = json.loads(comparison.details_json)
@@ -237,7 +272,7 @@ async def list_comparisons(execution_id: UUID, session: AsyncSession = Depends(g
     return Response[List[DetailedComparisonResponse]](data=items)
 
 
-# 在独立数据库 Session 中执行重新比对后台任务，避免复用请求生命周期内的 Session。
+# 在独立数据库 Session 中执行手动重比对后台任务，避免复用请求生命周期内的 Session 导致连接提前释放。
 async def run_recompare(execution_id: UUID, llm_model_id: UUID) -> None:
     from app.core.db import AsyncSessionLocal
 
@@ -245,8 +280,12 @@ async def run_recompare(execution_id: UUID, llm_model_id: UUID) -> None:
         await _run_recompare_with_session(session, execution_id, llm_model_id)
 
 
-# 执行重新比对的核心流程；Trace 等待规则与自动比对保持一致，避免手动比对提前读取未完整落库的 span。
-async def _run_recompare_with_session(session: AsyncSession, execution_id: UUID, llm_model_id: UUID) -> None:
+# 执行手动重比对的核心流程，Trace 等待规则与自动比对保持一致，避免在 span 尚未落库完成时提前读取。
+async def _run_recompare_with_session(
+    session: AsyncSession,
+    execution_id: UUID,
+    llm_model_id: UUID,
+) -> None:
     from datetime import UTC, datetime
 
     from app.domain.entities.comparison import ComparisonResult, ComparisonStatus
@@ -295,7 +334,12 @@ async def _run_recompare_with_session(session: AsyncSession, execution_id: UUID,
     compare_enabled = getattr(scenario, "compare_enabled", True)
     for index, delay in enumerate(retry_delays):
         if delay:
-            logger.info("Trace not ready for recompare, waiting %ss before retry (%s/%s)...", delay, index, len(retry_delays) - 1)
+            logger.info(
+                "Trace not ready for recompare, waiting %ss before retry (%s/%s)...",
+                delay,
+                index,
+                len(retry_delays) - 1,
+            )
             await asyncio.sleep(delay)
         spans = await trace_fetcher.fetch_spans(execution.trace_id)
         if not compare_enabled or is_trace_ready_for_comparison(spans, expected_min_llm_count):
@@ -326,7 +370,11 @@ async def _run_recompare_with_session(session: AsyncSession, execution_id: UUID,
         comparison.completed_at = datetime.now(UTC)
         await session.commit()
 
-        execution.status = ExecutionStatus.COMPLETED_WITH_MISMATCH if comparison.overall_passed is False else ExecutionStatus.COMPLETED
+        execution.status = (
+            ExecutionStatus.COMPLETED_WITH_MISMATCH
+            if comparison.overall_passed is False
+            else ExecutionStatus.COMPLETED
+        )
         execution.comparison_score = None
         execution.comparison_passed = comparison.overall_passed
         execution.error_message = None
@@ -340,7 +388,7 @@ async def _run_recompare_with_session(session: AsyncSession, execution_id: UUID,
 
 
 @router.post("/{execution_id}/recompare")
-# 触发手动重新比对，接口只负责校验执行和比对模型存在，实际比对放入后台任务执行。
+# 触发手动重比对接口，仅负责校验执行记录和比对模型存在，实际比对放入后台任务异步执行。
 async def trigger_recompare(
     execution_id: UUID,
     background_tasks: BackgroundTasks,
@@ -358,11 +406,13 @@ async def trigger_recompare(
         return Response(code=404, message="LLM model not found", data=None)
 
     background_tasks.add_task(run_recompare, execution_id, llm_model_id)
-    return Response[RecompareResponse](data=RecompareResponse(success=True, message="Recompare triggered in background"))
+    return Response[RecompareResponse](
+        data=RecompareResponse(success=True, message="Recompare triggered in background")
+    )
 
 
-# 创建并发执行批次，前端只传并发数和比对模型，Agent 请求模型由服务层固定。
 @router.post("/concurrent")
+# 创建并发执行批次接口，前端只传并发数和比对模型，Agent 调用模式由服务层统一约束。
 async def create_concurrent_execution(
     request: ConcurrentExecutionRequest,
     background_tasks: BackgroundTasks,
@@ -378,13 +428,21 @@ async def create_concurrent_execution(
             request.llm_model_id,
             request.agent_id,
         )
-        return Response[ConcurrentExecutionResponse](data=ConcurrentExecutionResponse(batch_id=batch_id, message="Concurrent execution started"))
+        return Response[ConcurrentExecutionResponse](
+            data=ConcurrentExecutionResponse(
+                batch_id=batch_id,
+                message="Concurrent execution started",
+            )
+        )
     except ValueError as e:
         return Response(code=1, message=str(e), data=None)
 
 
 @router.get("/concurrent/{batch_id}")
-async def get_concurrent_execution_status(batch_id: str, session: AsyncSession = Depends(get_db)) -> Response[dict]:
+async def get_concurrent_execution_status(
+    batch_id: str,
+    session: AsyncSession = Depends(get_db),
+) -> Response[dict]:
     try:
         service = ConcurrentExecutionService(session)
         status = await service.get_concurrent_execution_status(batch_id)
