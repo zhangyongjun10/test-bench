@@ -65,3 +65,6 @@ logs/
 # Database
 *.db
 *.sqlite
+
+# Environment variables (contains secrets)
+.env
