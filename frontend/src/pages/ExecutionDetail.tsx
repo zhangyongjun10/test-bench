@@ -455,14 +455,14 @@ const formatSpanDuration = (durationMs?: number | null) => {
   if (durationMs == null) {
     return '-'
   }
-  return `${durationMs}ms`
+  return `${Number(durationMs.toFixed(2))}ms`
 }
 
 const formatLatencyMetric = (value?: number | null) => {
   if (value == null) {
     return '-'
   }
-  return `${value.toFixed(2)}ms`
+  return `${Number(value.toFixed(2))}ms`
 }
 
 const formatTokenUsage = (inputTokens?: number, outputTokens?: number) => {
@@ -1407,8 +1407,8 @@ const ExecutionDetail = () => {
                         {span.span_type === 'llm' && (
                           <span>Tokens: {formatTokenUsage(span.input_tokens, span.output_tokens)}</span>
                         )}
-                        {span.ttft_ms != null && <span>TTFT {Math.round(span.ttft_ms)}ms</span>}
-                        {span.tpot_ms != null && <span>TPOT {span.tpot_ms.toFixed(1)}ms</span>}
+                        {span.ttft_ms != null && <span>TTFT {formatLatencyMetric(span.ttft_ms)}</span>}
+                        {span.tpot_ms != null && <span>TPOT {formatLatencyMetric(span.tpot_ms)}</span>}
                       </div>
                     </div>
                   </div>

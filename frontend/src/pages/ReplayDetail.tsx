@@ -59,12 +59,12 @@ const pretty = (value?: string | null) => {
 
 const formatDuration = (durationMs?: number | null) => {
   if (durationMs == null) return '-'
-  return `${durationMs}ms`
+  return `${Number(durationMs.toFixed(2))}ms`
 }
 
 const formatLatencyMetric = (value?: number | null) => {
   if (value == null) return '-'
-  return `${value.toFixed(2)}ms`
+  return `${Number(value.toFixed(2))}ms`
 }
 
 const tokenUsage = (input?: number, output?: number) => `${(input || 0) + (output || 0)}(${input || 0}+${output || 0})`
@@ -440,8 +440,8 @@ const TracePanel = ({ title, trace, loading }: { title: string; trace: Execution
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', color: '#666', fontSize: 12 }}>
                       <span>耗时 {formatDuration(span.duration_ms)}</span>
                       {span.span_type === 'llm' && <span>Tokens: {tokenUsage(span.input_tokens, span.output_tokens)}</span>}
-                      {span.ttft_ms != null && <span>TTFT {Math.round(span.ttft_ms)}ms</span>}
-                      {span.tpot_ms != null && <span>TPOT {span.tpot_ms.toFixed(1)}ms</span>}
+                      {span.ttft_ms != null && <span>TTFT {formatLatencyMetric(span.ttft_ms)}</span>}
+                      {span.tpot_ms != null && <span>TPOT {formatLatencyMetric(span.tpot_ms)}</span>}
                     </div>
                   </div>
                 </div>
