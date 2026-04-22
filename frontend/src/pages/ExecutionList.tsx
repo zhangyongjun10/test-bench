@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Button, Form, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, message } from 'antd'
+import { Button, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, message } from 'antd'
 import { DeleteOutlined, EyeOutlined, PlusOutlined, RetweetOutlined } from '@ant-design/icons'
 import type { ColumnsType } from 'antd/es/table'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
@@ -74,6 +74,20 @@ type ExecutionFormValues = {
   concurrency?: number
 }
 
+// 比对结果筛选值需要同时驱动 URL、列表查询和轮询刷新，避免页面返回或自动刷新后筛选条件丢失。
+type ComparisonResultFilterValue = '' | 'passed' | 'failed' | 'pending'
+
+// 比对结果筛选项与后端 comparison_result 查询参数保持一一对应，确保展示文案和数据库过滤语义一致。
+const COMPARISON_RESULT_OPTIONS = [
+  { label: '通过', value: 'passed' },
+  { label: '未通过', value: 'failed' },
+  { label: '未生成', value: 'pending' },
+] as const
+
+// 解析 URL 中的比对结果筛选值，非法值统一回退为空，避免手工改参数后把列表请求打成无效查询。
+const parseComparisonResult = (value: string | null): ComparisonResultFilterValue =>
+  value === 'passed' || value === 'failed' || value === 'pending' ? value : ''
+
 const ExecutionList = () => {
   const navigate = useNavigate()
   const location = useLocation()
@@ -86,6 +100,10 @@ const ExecutionList = () => {
   const [llms, setLlms] = useState<LLMModel[]>([])
   const [selectedAgentId, setSelectedAgentId] = useState(() => searchParams.get('agent_id') || '')
   const [selectedScenarioId, setSelectedScenarioId] = useState(() => searchParams.get('scenario_id') || '')
+  const [selectedTraceId, setSelectedTraceId] = useState(() => searchParams.get('trace_id') || '')
+  const [selectedComparisonResult, setSelectedComparisonResult] = useState<ComparisonResultFilterValue>(() =>
+    parseComparisonResult(searchParams.get('comparison_result')),
+  )
   const [currentPage, setCurrentPage] = useState(() => parsePositiveInteger(searchParams.get('page'), 1))
   const [pageSize, setPageSize] = useState(() => parsePositiveInteger(searchParams.get('page_size'), 10))
   const [loading, setLoading] = useState(false)
@@ -107,11 +125,15 @@ const ExecutionList = () => {
   const syncListSearch = (nextState: {
     agentId?: string
     scenarioId?: string
+    traceId?: string
+    comparisonResult?: ComparisonResultFilterValue
     page?: number
     size?: number
   }) => {
     const agentId = nextState.agentId ?? selectedAgentId
     const scenarioId = nextState.scenarioId ?? selectedScenarioId
+    const traceId = nextState.traceId ?? selectedTraceId
+    const comparisonResult = nextState.comparisonResult ?? selectedComparisonResult
     const page = nextState.page ?? currentPage
     const size = nextState.size ?? pageSize
     const nextParams = new URLSearchParams()
@@ -120,6 +142,12 @@ const ExecutionList = () => {
     }
     if (scenarioId) {
       nextParams.set('scenario_id', scenarioId)
+    }
+    if (traceId) {
+      nextParams.set('trace_id', traceId)
+    }
+    if (comparisonResult) {
+      nextParams.set('comparison_result', comparisonResult)
     }
     if (page > 1) {
       nextParams.set('page', String(page))
@@ -158,10 +186,19 @@ const ExecutionList = () => {
     size = pageSize,
     agentId = selectedAgentId,
     scenarioId = selectedScenarioId,
+    traceId = selectedTraceId,
+    comparisonResult = selectedComparisonResult,
   ) => {
     setLoading(true)
     try {
-      const res = await executionApi.list(agentId || undefined, scenarioId || undefined, size, (page - 1) * size)
+      const res = await executionApi.list(
+        agentId || undefined,
+        scenarioId || undefined,
+        traceId || undefined,
+        comparisonResult || undefined,
+        size,
+        (page - 1) * size,
+      )
       setExecutions(res.data.items || [])
       setTotal(res.data.total || 0)
     } catch (error: any) {
@@ -180,14 +217,18 @@ const ExecutionList = () => {
   useEffect(() => {
     const nextAgentId = searchParams.get('agent_id') || ''
     const nextScenarioId = searchParams.get('scenario_id') || ''
+    const nextTraceId = searchParams.get('trace_id') || ''
+    const nextComparisonResult = parseComparisonResult(searchParams.get('comparison_result'))
     const nextPage = parsePositiveInteger(searchParams.get('page'), 1)
     const nextPageSize = parsePositiveInteger(searchParams.get('page_size'), 10)
 
     setSelectedAgentId(nextAgentId)
     setSelectedScenarioId(nextScenarioId)
+    setSelectedTraceId(nextTraceId)
+    setSelectedComparisonResult(nextComparisonResult)
     setCurrentPage(nextPage)
     setPageSize(nextPageSize)
-    void loadExecutions(nextPage, nextPageSize, nextAgentId, nextScenarioId)
+    void loadExecutions(nextPage, nextPageSize, nextAgentId, nextScenarioId, nextTraceId, nextComparisonResult)
   }, [searchParams])
 
   useEffect(() => {
@@ -199,7 +240,8 @@ const ExecutionList = () => {
       void loadExecutions()
     }, 5000)
     return () => window.clearInterval(timer)
-  }, [currentPage, pageSize, selectedAgentId, selectedScenarioId])
+  }, [currentPage, pageSize, selectedAgentId, selectedScenarioId, selectedTraceId, selectedComparisonResult])
+ 
 
   const openCreateModal = () => {
     form.resetFields()
@@ -418,6 +460,31 @@ const ExecutionList = () => {
             syncListSearch({ scenarioId: nextScenarioId, page: 1 })
           }}
           options={filteredScenarios.map(scenario => ({ label: scenario.name, value: scenario.id }))}
+        />
+        <Input
+          placeholder="筛选 Trace ID"
+          style={{ width: 280 }}
+          allowClear
+          value={selectedTraceId}
+          onChange={event => {
+            const nextTraceId = event.target.value.trim()
+            setSelectedTraceId(nextTraceId)
+            setCurrentPage(1)
+            syncListSearch({ traceId: nextTraceId, page: 1 })
+          }}
+        />
+        <Select
+          placeholder="筛选比对结果"
+          style={{ width: 180 }}
+          allowClear
+          value={selectedComparisonResult || undefined}
+          onChange={value => {
+            const nextComparisonResult = (value || '') as ComparisonResultFilterValue
+            setSelectedComparisonResult(nextComparisonResult)
+            setCurrentPage(1)
+            syncListSearch({ comparisonResult: nextComparisonResult, page: 1 })
+          }}
+          options={COMPARISON_RESULT_OPTIONS.map(option => ({ label: option.label, value: option.value }))}
         />
         <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
           新建执行

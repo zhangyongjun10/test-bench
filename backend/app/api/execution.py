@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Query
@@ -40,11 +40,54 @@ from app.services.execution_service import (
     count_openai_llm_spans,
     is_trace_ready_for_comparison,
 )
+from app.services.litellm_trace_timing_service import LiteLLMTraceTimingService
 from app.services.llm_service import LLMService
 from app.services.trace_fetcher import TraceFetcherImpl
 
 
 router = APIRouter(prefix="/api/v1/execution", tags=["execution"])
+
+
+# 计算 Trace 中 OpenAI LLM spans 的摘要指标；TTFT 使用简单平均，TPOT 按有效输出 token 数加权，避免短输出调用把整体 TPOT 拉偏。
+def _calculate_trace_summary(spans: list) -> tuple[float | None, float | None, int, int]:
+    openai_llm_spans = [
+        span
+        for span in spans
+        if (getattr(span, "span_type", "") or "").lower() == "llm"
+        and (getattr(span, "provider", "") or "").lower() == "openai"
+    ]
+    ttft_values = [
+        span.metrics.ttft_ms
+        for span in openai_llm_spans
+        if getattr(span, "metrics", None) is not None
+        and span.metrics.ttft_ms is not None
+    ]
+    avg_ttft_ms = (sum(ttft_values) / len(ttft_values)) if ttft_values else None
+    # TPOT 口径需要排除首 token，因此权重使用 output_tokens - 1；没有有效输出 token 的 span 不参与平均。
+    weighted_tpot_pairs = [
+        (span.metrics.tpot_ms, span.metrics.output_tokens - 1)
+        for span in openai_llm_spans
+        if getattr(span, "metrics", None) is not None
+        and span.metrics.tpot_ms is not None
+        and span.metrics.output_tokens > 1
+    ]
+    total_tpot_weight = sum(weight for _, weight in weighted_tpot_pairs)
+    avg_tpot_ms = (
+        sum(tpot * weight for tpot, weight in weighted_tpot_pairs) / total_tpot_weight
+        if total_tpot_weight > 0
+        else None
+    )
+    total_input_tokens = sum(
+        span.metrics.input_tokens
+        for span in openai_llm_spans
+        if getattr(span, "metrics", None) is not None
+    )
+    total_output_tokens = sum(
+        span.metrics.output_tokens
+        for span in openai_llm_spans
+        if getattr(span, "metrics", None) is not None
+    )
+    return avg_ttft_ms, avg_tpot_ms, total_input_tokens, total_output_tokens
 
 
 @router.post("")
@@ -62,15 +105,25 @@ async def create_execution(
 
 
 @router.get("")
+# 执行列表支持按 Agent、场景和比对结果筛选，查询参数需要与前端 URL 状态保持一致，确保轮询刷新后分页总数仍然准确。
 async def list_executions(
     agent_id: Optional[UUID] = None,
     scenario_id: Optional[UUID] = None,
+    trace_id: Optional[str] = None,
+    comparison_result: Optional[Literal["passed", "failed", "pending"]] = Query(None),
     limit: int = 20,
     offset: int = 0,
     session: AsyncSession = Depends(get_db),
 ) -> Response[ListResponse[ExecutionResponse]]:
     service = ExecutionService(session)
-    total, executions = await service.list_executions(agent_id, scenario_id, limit, offset)
+    total, executions = await service.list_executions(
+        agent_id,
+        scenario_id,
+        trace_id,
+        comparison_result,
+        limit,
+        offset,
+    )
     execution_ids = [execution.id for execution in executions]
     replay_count_map: dict[UUID, int] = {}
     if execution_ids:
@@ -105,6 +158,7 @@ async def get_execution(
 
 
 @router.get("/{execution_id}/trace")
+# Trace 回放接口在返回前补齐 LiteLLM PG 中可计算出的 TTFT，保证页面能直接展示每个 LLM 调用的首 token 耗时。
 async def get_trace(
     execution_id: UUID,
     session: AsyncSession = Depends(get_db),
@@ -116,6 +170,9 @@ async def get_trace(
 
     fetcher = TraceFetcherImpl(session)
     spans = await fetcher.fetch_spans(execution.trace_id)
+    # PG 计算值优先覆盖 ClickHouse 原生 ttft；查不到时保留原值，避免回放页出现回退缺失。
+    await LiteLLMTraceTimingService().enrich_spans_ttft(execution.trace_id, spans)
+    avg_ttft_ms, avg_tpot_ms, total_input_tokens, total_output_tokens = _calculate_trace_summary(spans)
     span_responses = [
         SpanResponse(
             span_id=span.span_id,
@@ -133,7 +190,14 @@ async def get_trace(
         for span in spans
     ]
     return Response[ExecutionTraceResponse](
-        data=ExecutionTraceResponse(trace_id=execution.trace_id, spans=span_responses)
+        data=ExecutionTraceResponse(
+            trace_id=execution.trace_id,
+            avg_ttft_ms=avg_ttft_ms,
+            avg_tpot_ms=avg_tpot_ms,
+            total_input_tokens=total_input_tokens,
+            total_output_tokens=total_output_tokens,
+            spans=span_responses,
+        )
     )
 
 

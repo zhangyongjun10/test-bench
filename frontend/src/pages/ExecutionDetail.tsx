@@ -455,10 +455,14 @@ const formatSpanDuration = (durationMs?: number | null) => {
   if (durationMs == null) {
     return '-'
   }
-  if (durationMs >= 1000) {
-    return `${(durationMs / 1000).toFixed(1)}s`
-  }
   return `${durationMs}ms`
+}
+
+const formatLatencyMetric = (value?: number | null) => {
+  if (value == null) {
+    return '-'
+  }
+  return `${value.toFixed(2)}ms`
 }
 
 const formatTokenUsage = (inputTokens?: number, outputTokens?: number) => {
@@ -1267,7 +1271,7 @@ const ExecutionDetail = () => {
 
       <Card
         title={
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <span>回放历史</span>
             <Tag color="blue" style={{ marginInlineEnd: 0, borderRadius: 999, paddingInline: 10 }}>
               {replayHistory.length} 次
@@ -1321,6 +1325,15 @@ const ExecutionDetail = () => {
             <span>Trace 回放</span>
             <Tag color="blue" style={{ marginInlineEnd: 0, borderRadius: 999, paddingInline: 10 }}>
               {visibleTraceSpans.length} spans
+            </Tag>
+            <Tag color="geekblue" style={{ marginInlineEnd: 0, borderRadius: 999, paddingInline: 10 }}>
+              平均 TTFT {formatLatencyMetric(trace?.avg_ttft_ms)}
+            </Tag>
+            <Tag color="purple" style={{ marginInlineEnd: 0, borderRadius: 999, paddingInline: 10 }}>
+              加权平均 TPOT {formatLatencyMetric(trace?.avg_tpot_ms)}
+            </Tag>
+            <Tag color="gold" style={{ marginInlineEnd: 0, borderRadius: 999, paddingInline: 10 }}>
+              总 Tokens: {formatTokenUsage(trace?.total_input_tokens, trace?.total_output_tokens)}
             </Tag>
           </div>
         }

@@ -261,14 +261,24 @@ class ExecutionService:
     async def get_execution(self, execution_id: UUID) -> Optional[ExecutionJob]:
         return await self.repo.get_by_id(execution_id)
 
+    # 执行列表查询透传比对结果筛选条件，由仓储层统一做数据库过滤，避免前端仅筛当前页导致总数和分页错位。
     async def list_executions(
         self,
         agent_id: Optional[UUID] = None,
         scenario_id: Optional[UUID] = None,
+        trace_id: Optional[str] = None,
+        comparison_result: Optional[str] = None,
         limit: int = 20,
         offset: int = 0,
     ) -> tuple[int, list[ExecutionJob]]:
-        return await self.repo.list_all(agent_id, scenario_id, limit, offset)
+        return await self.repo.list_all(
+            agent_id,
+            scenario_id,
+            trace_id,
+            comparison_result,
+            limit,
+            offset,
+        )
 
     async def delete_execution(self, execution_id: UUID) -> bool:
         execution = await self.repo.get_by_id(execution_id)

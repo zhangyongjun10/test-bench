@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     clickhouse_username: str = "default"
     clickhouse_password: Optional[str] = None
     clickhouse_source_type: str = "opik"  # opik or langfuse
+    # LiteLLM PG 连接 DSN；仅用于查询 SpendLogs 里的 TTFT，不与业务库共用连接。
+    litellm_database_url: Optional[str] = None
 
     # 加密密钥 (32 bytes base64 encoded)
     encryption_key: str = "your-encryption-key-change-in-production"

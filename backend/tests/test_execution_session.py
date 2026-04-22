@@ -14,6 +14,7 @@ from app.services.execution_service import (
     has_final_openai_llm_output,
     is_trace_ready_for_comparison,
 )
+from app.api.execution import _calculate_trace_summary
 
 
 # 验证 Agent 请求体默认使用 openclaw:main，并从 execution 级会话注入 user 字段。
@@ -171,3 +172,45 @@ async def test_create_execution_generates_execution_scoped_user_session(monkeypa
     execution = created_executions[0]
     assert execution.id == execution_id
     assert execution.user_session == f"exec_{execution_id.hex}"
+
+
+def test_calculate_trace_summary_uses_average_ttft_and_weighted_tpot_for_openai_llm_spans():
+    spans = [
+        SimpleNamespace(
+            span_type="llm",
+            provider="openai",
+            metrics=SimpleNamespace(ttft_ms=100.0, tpot_ms=10.0, input_tokens=300, output_tokens=20),
+        ),
+        SimpleNamespace(
+            span_type="llm",
+            provider="openai",
+            metrics=SimpleNamespace(ttft_ms=200.0, tpot_ms=30.0, input_tokens=400, output_tokens=30),
+        ),
+        SimpleNamespace(
+            span_type="llm",
+            provider="openai",
+            metrics=SimpleNamespace(ttft_ms=None, tpot_ms=None, input_tokens=500, output_tokens=40),
+        ),
+        SimpleNamespace(
+            span_type="llm",
+            provider="litellm",
+            metrics=SimpleNamespace(ttft_ms=999.0, tpot_ms=999.0, input_tokens=999, output_tokens=999),
+        ),
+        SimpleNamespace(
+            span_type="tool",
+            provider=None,
+            metrics=SimpleNamespace(ttft_ms=50.0, tpot_ms=5.0, input_tokens=1, output_tokens=1),
+        ),
+        SimpleNamespace(
+            span_type="llm",
+            provider="openai",
+            metrics=SimpleNamespace(ttft_ms=400.0, tpot_ms=999.0, input_tokens=10, output_tokens=1),
+        ),
+    ]
+
+    avg_ttft_ms, avg_tpot_ms, total_input_tokens, total_output_tokens = _calculate_trace_summary(spans)
+
+    assert avg_ttft_ms == pytest.approx((100.0 + 200.0 + 400.0) / 3)
+    assert avg_tpot_ms == pytest.approx((10.0 * 19 + 30.0 * 29) / (19 + 29))
+    assert total_input_tokens == 1210
+    assert total_output_tokens == 91

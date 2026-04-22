@@ -31,10 +31,13 @@ class ExecutionRepository(ABC):
         """Fetch an execution by id."""
 
     @abstractmethod
+    # 执行列表接口约定支持数据库级分页与筛选，调用方传入的比对结果条件必须直接影响 total 和 items，避免前端自行二次过滤。
     async def list_all(
         self,
         agent_id: Optional[UUID] = None,
         scenario_id: Optional[UUID] = None,
+        trace_id: Optional[str] = None,
+        comparison_result: Optional[str] = None,
         limit: int = 20,
         offset: int = 0,
     ) -> tuple[int, List[ExecutionJob]]:
@@ -148,10 +151,13 @@ class SQLAlchemyExecutionRepository(ExecutionRepository):
         )
         return result.scalar_one_or_none()
 
+    # 执行列表查询需要在数据库层完成比对结果过滤，避免分页列表只对当前页做前端筛选导致总数和排序不一致。
     async def list_all(
         self,
         agent_id: Optional[UUID] = None,
         scenario_id: Optional[UUID] = None,
+        trace_id: Optional[str] = None,
+        comparison_result: Optional[str] = None,
         limit: int = 20,
         offset: int = 0,
     ) -> tuple[int, List[ExecutionJob]]:
@@ -177,6 +183,20 @@ class SQLAlchemyExecutionRepository(ExecutionRepository):
         if scenario_id:
             count_query = count_query.where(ExecutionJob.scenario_id == scenario_id)
             data_query = data_query.where(ExecutionJob.scenario_id == scenario_id)
+        if trace_id:
+            count_query = count_query.where(ExecutionJob.trace_id == trace_id)
+            data_query = data_query.where(ExecutionJob.trace_id == trace_id)
+        if comparison_result == "passed":
+            count_query = count_query.where(ExecutionJob.comparison_passed.is_(True))
+            data_query = data_query.where(ExecutionJob.comparison_passed.is_(True))
+        elif comparison_result == "failed":
+            count_query = count_query.where(ExecutionJob.comparison_passed.is_(False))
+            data_query = data_query.where(ExecutionJob.comparison_passed.is_(False))
+        elif comparison_result == "pending":
+            count_query = count_query.where(ExecutionJob.comparison_passed.is_(None))
+            data_query = data_query.where(ExecutionJob.comparison_passed.is_(None))
+        elif comparison_result not in (None, ""):
+            raise ValueError(f"Unsupported comparison_result: {comparison_result}")
 
         count_result = await self.session.execute(count_query)
         total = count_result.scalar_one()

@@ -59,7 +59,12 @@ const pretty = (value?: string | null) => {
 
 const formatDuration = (durationMs?: number | null) => {
   if (durationMs == null) return '-'
-  return durationMs >= 1000 ? `${(durationMs / 1000).toFixed(1)}s` : `${durationMs}ms`
+  return `${durationMs}ms`
+}
+
+const formatLatencyMetric = (value?: number | null) => {
+  if (value == null) return '-'
+  return `${value.toFixed(2)}ms`
 }
 
 const tokenUsage = (input?: number, output?: number) => `${(input || 0) + (output || 0)}(${input || 0}+${output || 0})`
@@ -373,6 +378,19 @@ const TracePanel = ({ title, trace, loading }: { title: string; trace: Execution
         body: { background: 'linear-gradient(180deg, #f8fbff 0%, #f5f7fb 100%)', padding: 24 },
       }}
     >
+      {!loading && (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
+          <Tag color="geekblue" style={{ marginInlineEnd: 0, borderRadius: 999, paddingInline: 10 }}>
+            平均 TTFT {formatLatencyMetric(trace?.avg_ttft_ms)}
+          </Tag>
+          <Tag color="purple" style={{ marginInlineEnd: 0, borderRadius: 999, paddingInline: 10 }}>
+            加权平均 TPOT {formatLatencyMetric(trace?.avg_tpot_ms)}
+          </Tag>
+          <Tag color="gold" style={{ marginInlineEnd: 0, borderRadius: 999, paddingInline: 10 }}>
+            总 Tokens: {tokenUsage(trace?.total_input_tokens, trace?.total_output_tokens)}
+          </Tag>
+        </div>
+      )}
       {loading && <Spin />}
       {!loading && spans.length === 0 && <Alert type="info" showIcon message="暂无 Trace 数据" />}
       {!loading && spans.length > 0 && (

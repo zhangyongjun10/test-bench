@@ -62,6 +62,10 @@ class ExecutionTraceResponse(BaseModel):
     """鎵ц Trace 鍝嶅簲"""
 
     trace_id: str
+    avg_ttft_ms: float | None = None
+    avg_tpot_ms: float | None = None
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
     spans: list[SpanResponse]
 
 

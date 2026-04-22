@@ -82,3 +82,14 @@ def test_extract_tool_metrics_ignores_none_duration():
     assert metrics.tool.avg_duration_ms == 15
     assert metrics.tool.p50_duration_ms == 15
     assert metrics.tool.p99_duration_ms == 15
+
+
+def test_tpot_formula_excludes_ttft_and_first_token():
+    # TPOT 定义为去掉首 token 等待时间后，剩余 token 的平均生成耗时。
+    duration_ms = 1000
+    ttft_ms = 400
+    output_tokens = 4
+
+    tpot_ms = (duration_ms - ttft_ms) / (output_tokens - 1)
+
+    assert tpot_ms == pytest.approx(200.0)

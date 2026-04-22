@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import UTC, datetime
-from sqlalchemy import Column, String, Text, ForeignKey, Double, Boolean, DateTime
+from sqlalchemy import Column, String, Text, ForeignKey, Double, Boolean, DateTime, Index
 from sqlalchemy.dialects.postgresql import UUID
 from app.core.db import Base
 
@@ -11,6 +11,10 @@ class ExecutionJob(Base):
     """执行任务"""
 
     __tablename__ = "execution_jobs"
+    __table_args__ = (
+        # Trace 列表与回放排查都会按 trace_id 精确定位执行记录，索引需要覆盖 execution_jobs 上的 trace_id 查询路径。
+        Index("ix_execution_jobs_trace_id", "trace_id"),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     agent_id = Column(UUID(as_uuid=True), ForeignKey("agents.id"), nullable=False)

@@ -33,6 +33,7 @@ class Span:
     end_time_ms: Optional[int]
     duration_ms: Optional[int]
     metrics: SpanMetrics
+    openclaw_llm_call_id: Optional[str] = None
 
 
 @dataclass

@@ -134,6 +134,10 @@ export interface Span {
 
 export interface ExecutionTrace {
   trace_id: string
+  avg_ttft_ms?: number | null
+  avg_tpot_ms?: number | null
+  total_input_tokens?: number
+  total_output_tokens?: number
   spans: Span[]
 }
 

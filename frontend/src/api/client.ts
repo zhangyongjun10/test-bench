@@ -82,10 +82,24 @@ export const executionApi = {
   create: (data: CreateExecutionRequest) => asResponse<string>(request.post('/v1/execution', data)),
   createConcurrent: (data: CreateConcurrentExecutionRequest) =>
     asResponse<{ batch_id: string; message: string }>(request.post('/v1/execution/concurrent', data)),
-  list: (agentId?: string, scenarioId?: string, limit?: number, offset?: number) =>
+  list: (
+    agentId?: string,
+    scenarioId?: string,
+    traceId?: string,
+    comparisonResult?: string,
+    limit?: number,
+    offset?: number,
+  ) =>
     asResponse<ExecutionListData>(
       request.get('/v1/execution', {
-        params: { agent_id: agentId, scenario_id: scenarioId, limit, offset },
+        params: {
+          agent_id: agentId,
+          scenario_id: scenarioId,
+          trace_id: traceId,
+          comparison_result: comparisonResult,
+          limit,
+          offset,
+        },
       }),
     ),
   get: (id: string) => asResponse<ExecutionJob>(request.get(`/v1/execution/${id}`)),

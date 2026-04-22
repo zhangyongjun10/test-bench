@@ -163,6 +163,7 @@ class TraceFetcherImpl(TraceFetcher):
                 name,
                 provider,
                 type as span_type,
+                JSONExtractString(metadata, 'requester_metadata', 'openclaw_llm_call_id') as openclaw_llm_call_id,
                 start_time,
                 end_time,
                 duration,
@@ -181,6 +182,7 @@ class TraceFetcherImpl(TraceFetcher):
                 name,
                 provider,
                 type as span_type,
+                JSONExtractString(metadata, 'requester_metadata', 'openclaw_llm_call_id') as openclaw_llm_call_id,
                 start_time,
                 end_time,
                 duration,
@@ -215,6 +217,7 @@ class TraceFetcherImpl(TraceFetcher):
                         name,
                         provider,
                         type as span_type,
+                        JSONExtractString(metadata, 'requester_metadata', 'openclaw_llm_call_id') as openclaw_llm_call_id,
                         start_time,
                         end_time,
                         duration,
@@ -233,6 +236,7 @@ class TraceFetcherImpl(TraceFetcher):
                         name,
                         provider,
                         type as span_type,
+                        JSONExtractString(metadata, 'requester_metadata', 'openclaw_llm_call_id') as openclaw_llm_call_id,
                         start_time,
                         end_time,
                         duration,
@@ -275,8 +279,10 @@ class TraceFetcherImpl(TraceFetcher):
 
             # 根据 duration 和 output_tokens 推算 TPOT
             tpot_ms = None
-            if duration_ms is not None and output_tokens > 0:
-                tpot_ms = duration_ms / output_tokens
+            if duration_ms is not None and ttft_ms is not None and output_tokens > 1:
+                remaining_duration_ms = duration_ms - ttft_ms
+                if remaining_duration_ms >= 0:
+                    tpot_ms = remaining_duration_ms / (output_tokens - 1)
 
             metrics = SpanMetrics(
                 ttft_ms=ttft_ms,
@@ -313,7 +319,8 @@ class TraceFetcherImpl(TraceFetcher):
                 start_time_ms=start_ms,
                 end_time_ms=end_ms,
                 duration_ms=duration_ms,
-                metrics=metrics
+                metrics=metrics,
+                openclaw_llm_call_id=row.get('openclaw_llm_call_id') or None,
             )
             spans.append(span)
 

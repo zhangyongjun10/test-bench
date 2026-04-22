@@ -209,6 +209,50 @@ async def test_get_trace_returns_provider_for_llm_spans(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_list_executions_forwards_trace_id_filter(monkeypatch):
+    captured_args: dict[str, object] = {}
+
+    class FakeExecutionService:
+        def __init__(self, session):
+            del session
+
+        async def list_executions(self, agent_id, scenario_id, trace_id, comparison_result, limit, offset):
+            captured_args.update(
+                {
+                    "agent_id": agent_id,
+                    "scenario_id": scenario_id,
+                    "trace_id": trace_id,
+                    "comparison_result": comparison_result,
+                    "limit": limit,
+                    "offset": offset,
+                }
+            )
+            return 0, []
+
+    monkeypatch.setattr(execution_api, "ExecutionService", FakeExecutionService)
+
+    response = await execution_api.list_executions(
+        agent_id=None,
+        scenario_id=None,
+        trace_id="019da9fc-f273-710c-ad3c-28c86bff416e",
+        comparison_result="passed",
+        limit=10,
+        offset=20,
+        session=object(),
+    )
+
+    assert response.code == 0
+    assert captured_args == {
+        "agent_id": None,
+        "scenario_id": None,
+        "trace_id": "019da9fc-f273-710c-ad3c-28c86bff416e",
+        "comparison_result": "passed",
+        "limit": 10,
+        "offset": 20,
+    }
+
+
+@pytest.mark.asyncio
 async def test_trigger_recompare_returns_404_when_llm_model_missing(monkeypatch):
     execution = SimpleNamespace(id=uuid.uuid4())
 
