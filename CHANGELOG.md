@@ -1,5 +1,27 @@
 # 更新日志
 
+## 2026-04-22
+
+### Trace 回放指标与展示
+- 新增 LiteLLM PG timing 补值服务，Trace 回放会按 `trace_id -> session_id` 批量查询 `LiteLLM_SpendLogs`，并使用 `openclaw_llm_call_id` 回填 OpenAI LLM span 的 `TTFT`。
+- Trace 回放中的 `TPOT` 改为优先使用 LiteLLM PG 同源时间口径计算：分子取 `endTime - completionStartTime`，分母取各调用的 `output_tokens - 1`，仅在 PG 缺少对应时长时才回退到旧口径。
+- Trace 顶部新增摘要指标：`平均 TTFT`、`加权平均 TPOT`、`总 Tokens`，并在执行详情页与回放详情页统一展示。
+- Trace 卡片中的调用耗时改为直接显示毫秒值，避免秒级四舍五入导致和接口返回值对不上。
+- 顶部摘要中的时延指标改为保留 2 位小数显示，方便直接和数据库查询结果对账。
+
+### 测试执行列表筛选
+- 测试执行列表新增按 `trace_id` 精确过滤能力，前端筛选条件会同步写入 URL，保证分页、轮询刷新和返回列表时状态一致。
+- 测试执行列表继续支持按比对结果过滤，后端在数据库层统一处理 `passed`、`failed`、`pending` 筛选，避免前端只筛当前页导致总数失真。
+
+### 数据库迁移与索引
+- 为 `execution_jobs.trace_id` 新增索引迁移，支撑执行列表和排障场景下按 Trace 精确定位执行记录。
+- 修正新增迁移的 revision id 长度，避免超过 Alembic 默认 `alembic_version.version_num varchar(32)` 限制导致升级失败。
+- 排查并修复数据库中 `alembic_version` 同时残留 `0010` 与 `0012_add_execution_batches` 的脏状态后，确认迁移已成功升级到 `0013_add_execution_trace_index`。
+
+### 配置与本地环境
+- 新增 `LITELLM_DATABASE_URL` 配置项，用于连接 LiteLLM PG 补齐 Trace timing 数据。
+- 允许仓库跟踪 `.env` 文件，同时在当前本地环境中补充 LiteLLM PG 连接配置，便于直接验证 Trace timing 补值链路。
+
 ## 2026-04-20
 
 ### 并发执行状态机加固
