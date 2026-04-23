@@ -49,7 +49,9 @@ router = APIRouter(prefix="/api/v1/execution", tags=["execution"])
 
 
 # 计算 Trace 中 OpenAI LLM spans 的摘要指标；TTFT 使用简单平均，TPOT 按有效输出 token 数加权，避免短输出调用把整体 TPOT 拉偏。
-def _calculate_trace_summary(spans: list) -> tuple[float | None, float | None, int, int]:
+def _calculate_trace_summary(
+    spans: list,
+) -> tuple[int, float | None, float | None, float | None, float | None, int, int]:
     openai_llm_spans = [
         span
         for span in spans
@@ -77,6 +79,20 @@ def _calculate_trace_summary(spans: list) -> tuple[float | None, float | None, i
         if total_tpot_weight > 0
         else None
     )
+    weighted_output_throughput_pairs = [
+        (span.metrics.output_throughput_tps, span.metrics.output_tokens - 1)
+        for span in openai_llm_spans
+        if getattr(span, "metrics", None) is not None
+        and span.metrics.output_throughput_tps is not None
+        and span.metrics.output_tokens > 1
+    ]
+    total_output_throughput_weight = sum(weight for _, weight in weighted_output_throughput_pairs)
+    output_throughput_tps = (
+        sum(throughput * weight for throughput, weight in weighted_output_throughput_pairs)
+        / total_output_throughput_weight
+        if total_output_throughput_weight > 0
+        else None
+    )
     total_input_tokens = sum(
         span.metrics.input_tokens
         for span in openai_llm_spans
@@ -87,7 +103,25 @@ def _calculate_trace_summary(spans: list) -> tuple[float | None, float | None, i
         for span in openai_llm_spans
         if getattr(span, "metrics", None) is not None
     )
-    return avg_ttft_ms, avg_tpot_ms, total_input_tokens, total_output_tokens
+    total_duration_ms = sum(
+        span.duration_ms
+        for span in openai_llm_spans
+        if getattr(span, "metrics", None) is not None and span.duration_ms is not None and span.duration_ms > 0
+    )
+    total_throughput_tps = (
+        (total_input_tokens + total_output_tokens) / (total_duration_ms / 1000)
+        if total_duration_ms > 0
+        else None
+    )
+    return (
+        total_duration_ms,
+        avg_ttft_ms,
+        avg_tpot_ms,
+        output_throughput_tps,
+        total_throughput_tps,
+        total_input_tokens,
+        total_output_tokens,
+    )
 
 
 @router.post("")
@@ -172,7 +206,15 @@ async def get_trace(
     spans = await fetcher.fetch_spans(execution.trace_id)
     # PG 计算值优先覆盖 ClickHouse 原生 ttft；查不到时保留原值，避免回放页出现回退缺失。
     await LiteLLMTraceTimingService().enrich_spans_ttft(execution.trace_id, spans)
-    avg_ttft_ms, avg_tpot_ms, total_input_tokens, total_output_tokens = _calculate_trace_summary(spans)
+    (
+        total_duration_ms,
+        avg_ttft_ms,
+        avg_tpot_ms,
+        output_throughput_tps,
+        total_throughput_tps,
+        total_input_tokens,
+        total_output_tokens,
+    ) = _calculate_trace_summary(spans)
     span_responses = [
         SpanResponse(
             span_id=span.span_id,
@@ -186,14 +228,19 @@ async def get_trace(
             duration_ms=span.duration_ms,
             ttft_ms=span.metrics.ttft_ms,
             tpot_ms=span.metrics.tpot_ms,
+            output_throughput_tps=span.metrics.output_throughput_tps,
+            total_throughput_tps=span.metrics.total_throughput_tps,
         )
         for span in spans
     ]
     return Response[ExecutionTraceResponse](
         data=ExecutionTraceResponse(
             trace_id=execution.trace_id,
+            total_duration_ms=total_duration_ms,
             avg_ttft_ms=avg_ttft_ms,
             avg_tpot_ms=avg_tpot_ms,
+            output_throughput_tps=output_throughput_tps,
+            total_throughput_tps=total_throughput_tps,
             total_input_tokens=total_input_tokens,
             total_output_tokens=total_output_tokens,
             spans=span_responses,

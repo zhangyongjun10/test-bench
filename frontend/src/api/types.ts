@@ -130,12 +130,17 @@ export interface Span {
   duration_ms: number
   ttft_ms?: number
   tpot_ms?: number
+  output_throughput_tps?: number
+  total_throughput_tps?: number
 }
 
 export interface ExecutionTrace {
   trace_id: string
+  total_duration_ms?: number
   avg_ttft_ms?: number | null
   avg_tpot_ms?: number | null
+  output_throughput_tps?: number | null
+  total_throughput_tps?: number | null
   total_input_tokens?: number
   total_output_tokens?: number
   spans: Span[]

@@ -16,7 +16,7 @@ import {
   Tabs,
   message,
 } from 'antd'
-import { LeftOutlined, PushpinOutlined, ReloadOutlined } from '@ant-design/icons'
+import { CopyOutlined, LeftOutlined, PushpinOutlined, ReloadOutlined } from '@ant-design/icons'
 
 import { executionApi, llmApi, scenarioApi, scenarioApiExtended } from '../api/client'
 import type {
@@ -465,11 +465,33 @@ const formatLatencyMetric = (value?: number | null) => {
   return `${Number(value.toFixed(2))}ms`
 }
 
+// 统一格式化 Trace 吞吐量指标，以 tok/s 展示并保留最多 2 位小数。
+const formatThroughputMetric = (value?: number | null) => {
+  if (value == null) {
+    return '-'
+  }
+  return `${Number(value.toFixed(2))} tok/s`
+}
+
 const formatTokenUsage = (inputTokens?: number, outputTokens?: number) => {
   const input = inputTokens ?? 0
   const output = outputTokens ?? 0
   const total = input + output
   return `${total}(${input}+${output})`
+}
+
+// 复制 Trace 详情里的输入输出内容；优先使用浏览器剪贴板能力，并给出统一的成功或失败提示。
+const copyTraceDetailText = async (label: string, value?: string | null) => {
+  if (!value) {
+    message.warning(`暂无可复制的${label}`)
+    return
+  }
+  try {
+    await navigator.clipboard.writeText(value)
+    message.success(`${label}已复制`)
+  } catch {
+    message.error(`${label}复制失败`)
+  }
 }
 
 const getDisplayCreatedAt = (execution: ExecutionJob) => {
@@ -1329,8 +1351,17 @@ const ExecutionDetail = () => {
             <Tag color="geekblue" style={{ marginInlineEnd: 0, borderRadius: 999, paddingInline: 10 }}>
               平均 TTFT {formatLatencyMetric(trace?.avg_ttft_ms)}
             </Tag>
+            <Tag color="blue" style={{ marginInlineEnd: 0, borderRadius: 999, paddingInline: 10 }}>
+              总耗时 {formatLatencyMetric(trace?.total_duration_ms)}
+            </Tag>
             <Tag color="purple" style={{ marginInlineEnd: 0, borderRadius: 999, paddingInline: 10 }}>
               加权平均 TPOT {formatLatencyMetric(trace?.avg_tpot_ms)}
+            </Tag>
+            <Tag color="volcano" style={{ marginInlineEnd: 0, borderRadius: 999, paddingInline: 10 }}>
+              总吞吐量 {formatThroughputMetric(trace?.total_throughput_tps)}
+            </Tag>
+            <Tag color="cyan" style={{ marginInlineEnd: 0, borderRadius: 999, paddingInline: 10 }}>
+              输出吞吐量 {formatThroughputMetric(trace?.output_throughput_tps)}
             </Tag>
             <Tag color="gold" style={{ marginInlineEnd: 0, borderRadius: 999, paddingInline: 10 }}>
               总 Tokens: {formatTokenUsage(trace?.total_input_tokens, trace?.total_output_tokens)}
@@ -1409,6 +1440,12 @@ const ExecutionDetail = () => {
                         )}
                         {span.ttft_ms != null && <span>TTFT {formatLatencyMetric(span.ttft_ms)}</span>}
                         {span.tpot_ms != null && <span>TPOT {formatLatencyMetric(span.tpot_ms)}</span>}
+                        {span.output_throughput_tps != null && (
+                          <span>输出吞吐量 {formatThroughputMetric(span.output_throughput_tps)}</span>
+                        )}
+                        {span.total_throughput_tps != null && (
+                          <span>总吞吐量 {formatThroughputMetric(span.total_throughput_tps)}</span>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -1540,14 +1577,38 @@ const ExecutionDetail = () => {
                                 {formatTokenUsage(span.input_tokens, span.output_tokens)}
                               </Descriptions.Item>
                               <Descriptions.Item label="输入">
-                                <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                                  {stringifyPretty(span.input)}
-                                </pre>
+                                <div style={{ display: 'grid', gap: 8 }}>
+                                  <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                                    <Button
+                                      size="small"
+                                      type="text"
+                                      icon={<CopyOutlined />}
+                                      onClick={() => void copyTraceDetailText('输入', stringifyPretty(span.input))}
+                                    >
+                                      复制
+                                    </Button>
+                                  </div>
+                                  <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                                    {stringifyPretty(span.input)}
+                                  </pre>
+                                </div>
                               </Descriptions.Item>
                               <Descriptions.Item label="输出">
-                                <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                                  {stringifyPretty(span.output)}
-                                </pre>
+                                <div style={{ display: 'grid', gap: 8 }}>
+                                  <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                                    <Button
+                                      size="small"
+                                      type="text"
+                                      icon={<CopyOutlined />}
+                                      onClick={() => void copyTraceDetailText('输出', stringifyPretty(span.output))}
+                                    >
+                                      复制
+                                    </Button>
+                                  </div>
+                                  <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                                    {stringifyPretty(span.output)}
+                                  </pre>
+                                </div>
                               </Descriptions.Item>
                             </Descriptions>
                           ),

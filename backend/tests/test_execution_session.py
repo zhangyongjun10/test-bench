@@ -174,43 +174,96 @@ async def test_create_execution_generates_execution_scoped_user_session(monkeypa
     assert execution.user_session == f"exec_{execution_id.hex}"
 
 
-def test_calculate_trace_summary_uses_average_ttft_and_weighted_tpot_for_openai_llm_spans():
+def test_calculate_trace_summary_uses_average_ttft_weighted_tpot_and_throughputs_for_openai_llm_spans():
     spans = [
         SimpleNamespace(
             span_type="llm",
             provider="openai",
-            metrics=SimpleNamespace(ttft_ms=100.0, tpot_ms=10.0, input_tokens=300, output_tokens=20),
+            duration_ms=1000,
+            metrics=SimpleNamespace(
+                ttft_ms=100.0,
+                tpot_ms=10.0,
+                output_throughput_tps=100.0,
+                input_tokens=300,
+                output_tokens=20,
+            ),
         ),
         SimpleNamespace(
             span_type="llm",
             provider="openai",
-            metrics=SimpleNamespace(ttft_ms=200.0, tpot_ms=30.0, input_tokens=400, output_tokens=30),
+            duration_ms=2000,
+            metrics=SimpleNamespace(
+                ttft_ms=200.0,
+                tpot_ms=30.0,
+                output_throughput_tps=50.0,
+                input_tokens=400,
+                output_tokens=30,
+            ),
         ),
         SimpleNamespace(
             span_type="llm",
             provider="openai",
-            metrics=SimpleNamespace(ttft_ms=None, tpot_ms=None, input_tokens=500, output_tokens=40),
+            duration_ms=4000,
+            metrics=SimpleNamespace(
+                ttft_ms=None,
+                tpot_ms=None,
+                output_throughput_tps=None,
+                input_tokens=500,
+                output_tokens=40,
+            ),
         ),
         SimpleNamespace(
             span_type="llm",
             provider="litellm",
-            metrics=SimpleNamespace(ttft_ms=999.0, tpot_ms=999.0, input_tokens=999, output_tokens=999),
+            duration_ms=999,
+            metrics=SimpleNamespace(
+                ttft_ms=999.0,
+                tpot_ms=999.0,
+                output_throughput_tps=999.0,
+                input_tokens=999,
+                output_tokens=999,
+            ),
         ),
         SimpleNamespace(
             span_type="tool",
             provider=None,
-            metrics=SimpleNamespace(ttft_ms=50.0, tpot_ms=5.0, input_tokens=1, output_tokens=1),
+            duration_ms=50,
+            metrics=SimpleNamespace(
+                ttft_ms=50.0,
+                tpot_ms=5.0,
+                output_throughput_tps=20.0,
+                input_tokens=1,
+                output_tokens=1,
+            ),
         ),
         SimpleNamespace(
             span_type="llm",
             provider="openai",
-            metrics=SimpleNamespace(ttft_ms=400.0, tpot_ms=999.0, input_tokens=10, output_tokens=1),
+            duration_ms=500,
+            metrics=SimpleNamespace(
+                ttft_ms=400.0,
+                tpot_ms=999.0,
+                output_throughput_tps=None,
+                input_tokens=10,
+                output_tokens=1,
+            ),
         ),
     ]
 
-    avg_ttft_ms, avg_tpot_ms, total_input_tokens, total_output_tokens = _calculate_trace_summary(spans)
+    (
+        total_duration_ms,
+        avg_ttft_ms,
+        avg_tpot_ms,
+        output_throughput_tps,
+        total_throughput_tps,
+        total_input_tokens,
+        total_output_tokens,
+    ) = _calculate_trace_summary(spans)
 
+    assert total_duration_ms == 7500
     assert avg_ttft_ms == pytest.approx((100.0 + 200.0 + 400.0) / 3)
     assert avg_tpot_ms == pytest.approx((10.0 * 19 + 30.0 * 29) / (19 + 29))
+    assert output_throughput_tps == pytest.approx((100.0 * 19 + 50.0 * 29) / (19 + 29))
+    assert total_throughput_tps == pytest.approx((1210 + 91) / (7500 / 1000))
     assert total_input_tokens == 1210
     assert total_output_tokens == 91

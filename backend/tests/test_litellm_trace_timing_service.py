@@ -39,6 +39,8 @@ async def test_enrich_spans_ttft_prefers_pg_value_and_pg_based_tpot(monkeypatch)
 
     assert span.metrics.ttft_ms == 345.0
     assert span.metrics.tpot_ms == pytest.approx(456.0 / 19)
+    assert span.metrics.output_throughput_tps == pytest.approx(19 / (456.0 / 1000))
+    assert span.metrics.total_throughput_tps == pytest.approx(30.0)
 
 
 @pytest.mark.asyncio
@@ -55,6 +57,8 @@ async def test_enrich_spans_ttft_keeps_clickhouse_ttft_when_pg_missing(monkeypat
     await service.enrich_spans_ttft("trace-1", [span])
 
     assert span.metrics.ttft_ms == 120.0
+    assert span.metrics.output_throughput_tps is None
+    assert span.metrics.total_throughput_tps == pytest.approx(30.0)
 
 
 @pytest.mark.asyncio
@@ -101,3 +105,22 @@ def test_calculate_tpot_ms_falls_back_to_duration_minus_ttft():
     )
 
     assert tpot_ms == pytest.approx(200.0)
+
+
+def test_calculate_total_throughput_tps_uses_total_tokens_and_duration():
+    throughput = LiteLLMTraceTimingService._calculate_total_throughput_tps(
+        duration_ms=2500,
+        input_tokens=100,
+        output_tokens=25,
+    )
+
+    assert throughput == pytest.approx(50.0)
+
+
+def test_calculate_output_throughput_tps_uses_output_tokens_minus_first_token():
+    throughput = LiteLLMTraceTimingService._calculate_output_throughput_tps(
+        output_tokens=25,
+        post_first_token_duration_ms=800,
+    )
+
+    assert throughput == pytest.approx(30.0)

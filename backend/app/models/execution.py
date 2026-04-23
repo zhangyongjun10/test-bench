@@ -1,4 +1,4 @@
-"""鎵ц妯″瀷"""
+"""执行相关的 API 请求与响应模型。"""
 
 from datetime import datetime
 from uuid import UUID
@@ -7,16 +7,15 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class CreateExecutionRequest(BaseModel):
-    """鍒涘缓鎵ц璇锋眰"""
+    """创建单次测试执行时的请求体，要求显式指定比对模型以保证后续收口一致。"""
 
     agent_id: UUID
     scenario_id: UUID
-    # 创建执行时必须指定比对模型，保证执行完成后可以进入统一的 LLM-only 比对流程。
     llm_model_id: UUID
 
 
 class ExecutionResponse(BaseModel):
-    """鎵ц鍝嶅簲"""
+    """执行列表与详情共用的响应结构，完整暴露执行状态和回放关联信息。"""
 
     id: UUID
     agent_id: UUID | None
@@ -43,7 +42,7 @@ class ExecutionResponse(BaseModel):
 
 
 class SpanResponse(BaseModel):
-    """Span 鍝嶅簲锛堢敤浜庡洖鏀撅級"""
+    """Trace 回放中的单个 Span 响应，包含原始输入输出和派生性能指标。"""
 
     span_id: str
     span_type: str
@@ -56,38 +55,44 @@ class SpanResponse(BaseModel):
     duration_ms: int | None
     ttft_ms: float | None
     tpot_ms: float | None
+    output_throughput_tps: float | None = None
+    total_throughput_tps: float | None = None
 
 
 class ExecutionTraceResponse(BaseModel):
-    """鎵ц Trace 鍝嶅簲"""
+    """执行 Trace 的聚合响应，顶部摘要和逐 Span 回放都依赖该结构。"""
 
     trace_id: str
+    total_duration_ms: int = 0
     avg_ttft_ms: float | None = None
     avg_tpot_ms: float | None = None
+    output_throughput_tps: float | None = None
+    total_throughput_tps: float | None = None
     total_input_tokens: int = 0
     total_output_tokens: int = 0
     spans: list[SpanResponse]
 
 
 class ComparisonResult(BaseModel):
-    """姣斿缁撴灉"""
+    """统一描述比对结论，供不同比对接口复用分数、结果和原因字段。"""
 
     score: float
     passed: bool
     reason: str
 
 
-# 创建并发执行请求，只暴露用户需要配置的并发数和比对模型，Agent 请求模型由后端固定。
 class ConcurrentExecutionRequest(BaseModel):
+    """创建并发执行时的请求体，只暴露并发度、输入和比对模型等必要参数。"""
+
     input: str = Field(..., min_length=1)
     concurrency: int = Field(..., ge=1)
     scenario_id: UUID | None = None
-    # 创建执行时必须指定比对模型，保证执行完成后可以进入统一的 LLM-only 比对流程。
     llm_model_id: UUID
     agent_id: UUID | None = None
 
 
-# 并发执行创建响应，返回批次 ID 供前端轮询批次状态。
 class ConcurrentExecutionResponse(BaseModel):
+    """并发执行创建成功后的响应，返回批次 ID 供前端轮询整体进度。"""
+
     batch_id: str
     message: str

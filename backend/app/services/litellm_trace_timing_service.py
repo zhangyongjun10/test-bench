@@ -23,7 +23,8 @@ class LiteLLMTraceTimingService:
     _pool: Optional[asyncpg.Pool] = None
     _pool_lock = asyncio.Lock()
 
-    # 按 trace_id 批量补齐 OpenAI LLM span 的 TTFT/TPOT；TPOT 优先使用 LiteLLM PG 同源的 endTime - completionStartTime 口径。
+    # 按 trace_id 批量补齐 OpenAI LLM span 的 TTFT/TPOT；
+    # TPOT 和输出吞吐量优先使用 LiteLLM PG 同源的 endTime - completionStartTime 口径。
     async def enrich_spans_ttft(self, trace_id: str, spans: list[Span]) -> None:
         target_spans = [
             span
@@ -36,24 +37,39 @@ class LiteLLMTraceTimingService:
             return
 
         timing_by_call_id = await self._fetch_timings_by_call_id(trace_id)
-        if not timing_by_call_id:
-            return
 
-        for span in target_spans:
-            call_id = getattr(span, "openclaw_llm_call_id", None)
-            if not call_id:
-                continue
+        if timing_by_call_id:
+            for span in target_spans:
+                call_id = getattr(span, "openclaw_llm_call_id", None)
+                if not call_id:
+                    continue
 
-            timing = timing_by_call_id.get(call_id)
-            if timing is None:
-                continue
+                timing = timing_by_call_id.get(call_id)
+                if timing is None:
+                    continue
 
-            span.metrics.ttft_ms = timing["ttft_ms"]
-            span.metrics.tpot_ms = self._calculate_tpot_ms(
+                span.metrics.ttft_ms = timing["ttft_ms"]
+                span.metrics.tpot_ms = self._calculate_tpot_ms(
+                    duration_ms=span.duration_ms,
+                    ttft_ms=span.metrics.ttft_ms,
+                    output_tokens=span.metrics.output_tokens,
+                    post_first_token_duration_ms=timing.get("post_first_token_duration_ms"),
+                )
+                span.metrics.output_throughput_tps = self._calculate_output_throughput_tps(
+                    output_tokens=span.metrics.output_tokens,
+                    post_first_token_duration_ms=timing.get("post_first_token_duration_ms"),
+                )
+
+        for span in spans:
+            if span.metrics.output_throughput_tps is None:
+                span.metrics.output_throughput_tps = self._calculate_output_throughput_tps(
+                    output_tokens=span.metrics.output_tokens,
+                    post_first_token_duration_ms=None,
+                )
+            span.metrics.total_throughput_tps = self._calculate_total_throughput_tps(
                 duration_ms=span.duration_ms,
-                ttft_ms=span.metrics.ttft_ms,
+                input_tokens=span.metrics.input_tokens,
                 output_tokens=span.metrics.output_tokens,
-                post_first_token_duration_ms=timing.get("post_first_token_duration_ms"),
             )
 
     # 从 LiteLLM SpendLogs 批量读取当前 trace 下的 timing，并按 openclaw_llm_call_id 构建唯一映射。
@@ -87,7 +103,8 @@ class LiteLLMTraceTimingService:
             if not call_id or not start_time:
                 continue
 
-            # 多条记录命中同一个调用时，优先选择 completionStartTime 非空的记录；仍冲突时选择 startTime 最新的一条。
+            # 多条记录命中同一个调用时，优先选择 completionStartTime 非空的记录；
+            # 仍冲突时选择 startTime 最新的一条。
             candidate_rank = (completion_start_time is not None, start_time)
             previous_rank = best_rows.get(call_id)
             if previous_rank and previous_rank >= candidate_rank:
@@ -156,7 +173,8 @@ class LiteLLMTraceTimingService:
             return urlunsplit(("postgres", parsed.netloc, parsed.path, parsed.query, parsed.fragment))
         return dsn
 
-    # PG 补齐 TTFT 后需要同步重算 TPOT；优先使用 LiteLLM PG 同源的 endTime - completionStartTime，缺失时再回退到 duration_ms - ttft_ms。
+    # PG 补齐 TTFT 后需要同步重算 TPOT；
+    # 优先使用 LiteLLM PG 同源的 endTime - completionStartTime，缺失时再回退到 duration_ms - ttft_ms。
     @staticmethod
     def _calculate_tpot_ms(
         duration_ms: Optional[int],
@@ -180,3 +198,32 @@ class LiteLLMTraceTimingService:
             return None
 
         return remaining_duration_ms / (output_tokens - 1)
+
+    # 总吞吐量包含输入与输出 token，分母为请求总耗时，用于反映端到端的 token 处理速率。
+    @staticmethod
+    def _calculate_total_throughput_tps(
+        duration_ms: Optional[int],
+        input_tokens: int,
+        output_tokens: int,
+    ) -> Optional[float]:
+        if duration_ms is None or duration_ms <= 0:
+            return None
+
+        total_tokens = input_tokens + output_tokens
+        if total_tokens <= 0:
+            return None
+
+        return total_tokens / (duration_ms / 1000)
+
+    # 输出吞吐量只统计首 token 之后的输出速率，分母固定使用 PG 同源的 endTime - completionStartTime。
+    @staticmethod
+    def _calculate_output_throughput_tps(
+        output_tokens: int,
+        post_first_token_duration_ms: Optional[float],
+    ) -> Optional[float]:
+        if output_tokens <= 1:
+            return None
+        if post_first_token_duration_ms is None or post_first_token_duration_ms <= 0:
+            return None
+
+        return (output_tokens - 1) / (post_first_token_duration_ms / 1000)
