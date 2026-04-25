@@ -221,6 +221,8 @@ async def get_trace(
             span_type=span.span_type,
             name=span.name,
             provider=getattr(span, "provider", None),
+            start_time_ms=getattr(span, "start_time_ms", None),
+            end_time_ms=getattr(span, "end_time_ms", None),
             input_tokens=span.metrics.input_tokens,
             output_tokens=span.metrics.output_tokens,
             input=span.input,

@@ -79,13 +79,16 @@ async def delete_scenario(
     scenario_id: UUID,
     session: AsyncSession = Depends(get_db),
 ) -> Response[None]:
-    """删除 Case，仅对未删除记录返回成功。"""
+    """物理删除 Case；若仍被执行、比对或回放引用则返回明确错误。"""
 
     service = ScenarioService(session)
-    success = await service.delete_scenario(scenario_id)
-    if not success:
-        return Response(code=404, message="Scenario not found", data=None)
-    return Response[None](code=0, message="Deleted", data=None)
+    try:
+        success = await service.delete_scenario(scenario_id)
+        if not success:
+            return Response(code=404, message="Scenario not found", data=None)
+        return Response[None](code=0, message="Deleted", data=None)
+    except ValueError as error:
+        return Response(code=1, message=str(error), data=None)
 
 
 @router.post("/{scenario_id}/set-baseline/{execution_id}")

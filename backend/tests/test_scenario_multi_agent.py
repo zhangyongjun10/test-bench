@@ -39,6 +39,7 @@ class FakeScenarioRepository:
             updated_at=now,
         )
         self.create_count = 0
+        self.deleted_ids: list[str] = []
         self.replace_calls: list[tuple[str, list[str]]] = []
         self.binding_map: dict = {}
 
@@ -59,9 +60,9 @@ class FakeScenarioRepository:
         return scenario
 
     async def delete(self, scenario_id):
-        """当前测试不覆盖删除路径，因此该伪实现不会执行。"""
+        """记录被删除的 Case 主键，模拟服务层触发真实物理删除。"""
 
-        del scenario_id
+        self.deleted_ids.append(str(scenario_id))
 
     async def get_by_id(self, scenario_id):
         """返回唯一的伪造 Case，便于验证编辑仍作用于单条记录。"""
@@ -187,6 +188,40 @@ async def test_update_scenario_replaces_agent_bindings():
     assert fake_repo.replace_calls == [(str(fake_repo.scenario.id), [str(agent_id) for agent_id in new_agent_ids])]
     assert response.agent_ids == new_agent_ids
     assert response.agent_names == ["Agent-1", "Agent-2"]
+
+
+# 删除 Case 时应直接触发仓储层物理删除，而不是只做软删标记。
+@pytest.mark.asyncio
+async def test_delete_scenario_physically_deletes_case():
+    """验证删除 Case 会调用仓储层物理删除，并返回成功结果。"""
+
+    fake_repo = FakeScenarioRepository()
+    service = ScenarioService(session=SimpleNamespace())
+    service.repo = fake_repo
+
+    success = await service.delete_scenario(fake_repo.scenario.id)
+
+    assert success is True
+    assert fake_repo.deleted_ids == [str(fake_repo.scenario.id)]
+
+
+# 若 Case 仍被执行、比对或回放引用，删除动作必须明确失败而不是表面删除成功。
+@pytest.mark.asyncio
+async def test_delete_scenario_rejects_referenced_case():
+    """验证仓储层发现外键引用后，服务层会把错误继续抛出给接口处理。"""
+
+    fake_repo = FakeScenarioRepository()
+    service = ScenarioService(session=SimpleNamespace())
+    service.repo = fake_repo
+
+    async def fake_delete(scenario_id):
+        del scenario_id
+        raise ValueError("当前 Case 已被执行记录、比对记录或回放任务引用，无法删除")
+
+    fake_repo.delete = fake_delete
+
+    with pytest.raises(ValueError, match="当前 Case 已被执行记录、比对记录或回放任务引用，无法删除"):
+        await service.delete_scenario(fake_repo.scenario.id)
 
 
 # 执行创建必须校验 Agent 与 Case 的绑定关系，避免执行页提交非法组合后进入后台任务。

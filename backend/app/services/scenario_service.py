@@ -117,7 +117,7 @@ class ScenarioService:
         return await self._build_response(result)
 
     async def delete_scenario(self, scenario_id: UUID) -> bool:
-        """删除 Case 前先确认记录存在，避免前端误报成功。"""
+        """物理删除 Case 前先确认主记录存在，并把仓储层引用校验错误继续上抛。"""
 
         scenario = await self.repo.get_by_id(scenario_id)
         if not scenario:

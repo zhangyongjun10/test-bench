@@ -1,11 +1,11 @@
 ﻿"""场景仓储接口与 SQLAlchemy 实现。"""
 
 from abc import ABC, abstractmethod
-from datetime import UTC, datetime
 from typing import Optional
 from uuid import UUID
 
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.entities.agent import Agent
@@ -25,7 +25,7 @@ class ScenarioRepository(ABC):
 
     @abstractmethod
     async def delete(self, scenario_id: UUID) -> None:
-        """软删除 Case，避免影响历史执行与回放记录的可追溯性。"""
+        """物理删除 Case 与 Agent 关联；如仍被执行链路引用则必须显式失败。"""
 
     @abstractmethod
     async def get_by_id(self, scenario_id: UUID) -> Optional[Scenario]:
@@ -77,12 +77,15 @@ class SQLAlchemyScenarioRepository(ScenarioRepository):
         return scenario
 
     async def delete(self, scenario_id: UUID) -> None:
-        """将 Case 标记为软删除，避免破坏历史执行与比对数据的引用链路。"""
+        """先删除 Agent 关联再物理删除 Case；若仍被执行链路引用则回滚并报错。"""
 
-        scenario = await self.get_by_id(scenario_id)
-        if scenario:
-            scenario.deleted_at = datetime.now(UTC)
+        try:
+            await self.session.execute(delete(ScenarioAgent).where(ScenarioAgent.scenario_id == scenario_id))
+            await self.session.execute(delete(Scenario).where(Scenario.id == scenario_id))
             await self.session.commit()
+        except IntegrityError as error:
+            await self.session.rollback()
+            raise ValueError("当前 Case 已被执行记录、比对记录或回放任务引用，无法删除") from error
 
     async def get_by_id(self, scenario_id: UUID) -> Optional[Scenario]:
         """按主键读取未删除 Case，详情页和编辑页都依赖该统一入口。"""

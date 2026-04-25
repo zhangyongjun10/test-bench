@@ -48,6 +48,8 @@ class SpanResponse(BaseModel):
     span_type: str
     name: str
     provider: str | None = None
+    start_time_ms: int | None = None
+    end_time_ms: int | None = None
     input_tokens: int = 0
     output_tokens: int = 0
     input: str | None

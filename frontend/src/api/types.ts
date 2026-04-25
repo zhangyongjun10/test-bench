@@ -124,6 +124,8 @@ export interface Span {
   span_type: string
   name: string
   provider?: string | null
+  start_time_ms?: number | null
+  end_time_ms?: number | null
   input_tokens?: number
   output_tokens?: number
   input?: string

@@ -32,6 +32,21 @@ class TraceFetcherImpl(TraceFetcher):
     def __init__(self, session: AsyncSession):
         self.session = session
 
+    @staticmethod
+    def _get_span_sort_key(span: Span, original_index: int) -> tuple[int, int, int]:
+        """Trace 展示顺序按开始时间到秒分组；同秒时再按结束时间和原始顺序稳定排序。"""
+
+        start_time_ms = span.start_time_ms if span.start_time_ms is not None else 0
+        end_time_ms = span.end_time_ms if span.end_time_ms is not None else start_time_ms
+        return (start_time_ms // 1000, end_time_ms, original_index)
+
+    def _sort_spans_for_display(self, spans: List[Span]) -> List[Span]:
+        """统一整理 Trace 展示顺序，避免毫秒抖动把同秒 tool 排到下一轮 LLM 后面。"""
+
+        indexed_spans = list(enumerate(spans))
+        indexed_spans.sort(key=lambda item: self._get_span_sort_key(item[1], item[0]))
+        return [span for _, span in indexed_spans]
+
     async def fetch_spans(self, trace_id: str) -> List[Span]:
         """从 ClickHouse 获取 trace 所有 span"""
         client = await self._create_client()
@@ -324,9 +339,7 @@ class TraceFetcherImpl(TraceFetcher):
             )
             spans.append(span)
 
-        # 保持排序：按 start_time 升序
-        spans.sort(key=lambda x: x.start_time_ms if x.start_time_ms is not None else 0)
-        return spans
+        return self._sort_spans_for_display(spans)
 
     async def _fetch_langfuse(self, client: ClickHouseClient, trace_id: str) -> List[Span]:
         """拉取 Langfuse 格式的 Trace"""
@@ -415,6 +428,4 @@ class TraceFetcherImpl(TraceFetcher):
             )
             spans.append(span)
 
-        # 保持排序：按 start_time 升序
-        spans.sort(key=lambda x: x.start_time_ms if x.start_time_ms is not None else 0)
-        return spans
+        return self._sort_spans_for_display(spans)

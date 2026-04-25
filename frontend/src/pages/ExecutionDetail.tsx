@@ -494,6 +494,11 @@ const copyTraceDetailText = async (label: string, value?: string | null) => {
   }
 }
 
+// Trace 列表在 tool 与下一轮 llm 撞秒时需要稳定排序，否则会让链路看起来像“先 llm 后 tool”。
+// 执行详情页直接使用后端给出的 Trace 顺序，前端只负责过滤不展示的聚合 LLM span。
+const getVisibleTraceSpans = (trace?: ExecutionTrace | null) =>
+  (trace?.spans ?? []).filter(span => span.span_type !== 'llm' || span.provider === 'openai')
+
 const getDisplayCreatedAt = (execution: ExecutionJob) => {
   if (!execution.created_at) {
     return execution.created_at
@@ -599,8 +604,7 @@ const ExecutionDetail = () => {
     [llmModels],
   )
   const visibleTraceSpans = useMemo(
-    () =>
-      trace?.spans.filter(span => span.span_type !== 'llm' || span.provider === 'openai') ?? [],
+    () => getVisibleTraceSpans(trace),
     [trace],
   )
   const getLlmModelName = (modelId?: string | null) => {

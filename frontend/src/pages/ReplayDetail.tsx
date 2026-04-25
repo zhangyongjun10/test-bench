@@ -89,8 +89,10 @@ const copyTraceDetailText = async (label: string, value?: string | null) => {
   }
 }
 
-const visibleSpans = (trace?: ExecutionTrace | null) =>
-  trace?.spans.filter(span => span.span_type !== 'llm' || span.provider === 'openai') ?? []
+// 回放 Trace 展示需要在同秒碰撞时维持稳定因果顺序：先比开始时间，再比结束时间，再让 tool 先于下一轮 llm。
+// 回放页直接使用后端给出的 Trace 顺序，前端只负责过滤不展示的聚合 LLM span。
+const getVisibleSpans = (trace?: ExecutionTrace | null) =>
+  (trace?.spans ?? []).filter(span => span.span_type !== 'llm' || span.provider === 'openai')
 
 const parseSnapshot = (value?: string) => {
   if (!value) return {}
@@ -380,7 +382,7 @@ const rolePanelBgMap: Record<string, string> = {
 }
 
 const TracePanel = ({ title, trace, loading }: { title: string; trace: ExecutionTrace | null; loading: boolean }) => {
-  const spans = visibleSpans(trace)
+  const spans = getVisibleSpans(trace)
 
   return (
     <Card
