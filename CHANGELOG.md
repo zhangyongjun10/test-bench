@@ -1,6 +1,22 @@
 # 更新日志
 
 
+## 2026-04-25
+
+### Case 管理界面重设计
+- 测试场景模块文案统一调整为 Case 语义：新增入口改为“添加 Case”，场景名称改为“Case 名称”，列表搜索也同步使用 Case 命名。
+- Case 列表移除描述字段，新增“输入 Prompt”和“基线输出”两列，便于在列表页直接核对执行输入与参考输出。
+- 添加/编辑 Case 弹窗重做为分区式录入界面，突出 Agent、Case 名称、输入 Prompt、基线输出和 LLM 调用范围等关键配置。
+- Case 表单中的“测试 Prompt”改名为“输入 Prompt”，“基线输出”改为必填，保证后续执行与结果比对具备完整基线。
+- 左侧导航入口同步更新为“Case 管理”，避免模块入口与页面内容命名不一致。
+- 完成 Case 多 Agent 单记录重构：后端新增 `scenario_agents` 中间表模型与迁移，Case 创建与编辑接口改为读写 `agent_ids`，列表与详情统一返回 `agent_names` 聚合结果，不再为每个 Agent 生成重复 Case 记录。
+- 新增历史数据迁移逻辑：将旧 `scenarios.agent_id` 回填到中间表，并自动合并字段完全一致的重复 Case，同时重写 `execution_jobs`、`comparison_results`、`replay_tasks` 的 `scenario_id` 引用后再删除重复记录。
+- 执行链路保持单 Agent 交互，但补充了 Agent 与 Case 绑定校验；Case 管理页与执行页前端改为基于 `agent_ids` 过滤。
+
+### Agent 超时配置统一
+- 统一 Agent 超时配置：前端测试连接请求超时从 30 秒调整为 60 秒，后端 `test_connection` 不再写死 60 秒，统一复用 `agent_timeout_seconds`，避免“测试连接”和“正式执行”超时表现不一致。
+
+
 ## 2026-04-23
 
 ### Trace 回放指标与展示

@@ -1,4 +1,4 @@
-import axios from 'axios'
+﻿import axios from 'axios'
 
 import type {
   Agent,
@@ -30,7 +30,7 @@ import type {
 
 const request = axios.create({
   baseURL: '/api',
-  timeout: 30000,
+  timeout: 60000,
 })
 
 request.interceptors.response.use(

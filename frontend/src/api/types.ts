@@ -1,11 +1,11 @@
-// 后端统一响应结构，所有业务接口通过 data 承载实际返回内容。
+// 后端统一响应结构，所有业务接口都通过 data 承载实际返回内容。
 export interface Response<T> {
   code: number
   message: string
   data: T
 }
 
-// Agent 列表与详情展示结构；Agent 不再暴露用户 Session，运行时会话由 execution 独立生成。
+// Agent 列表与详情结构；Agent 本身不再暴露运行态 Session。
 export interface Agent {
   id: string
   name: string
@@ -15,7 +15,7 @@ export interface Agent {
   updated_at: string
 }
 
-// 创建 Agent 的前端提交结构；仅包含连接配置，避免把会话状态绑定到 Agent 配置。
+// 创建 Agent 时只提交连接配置，避免把运行态会话耦合进静态配置。
 export interface AgentCreate {
   name: string
   description?: string
@@ -23,7 +23,7 @@ export interface AgentCreate {
   api_key: string
 }
 
-// 更新 Agent 的前端提交结构；沿用创建字段的局部更新能力，不包含用户 Session。
+// 更新 Agent 允许局部字段修改，沿用创建请求的字段集合。
 export interface AgentUpdate extends Partial<AgentCreate> {}
 
 export interface LLMModel {
@@ -54,8 +54,8 @@ export interface LLMUpdate extends Partial<LLMCreate> {}
 
 export interface Scenario {
   id: string
-  agent_id: string
-  agent_name?: string
+  agent_ids: string[]
+  agent_names: string[]
   name: string
   description?: string
   prompt: string
@@ -67,8 +67,9 @@ export interface Scenario {
   updated_at: string
 }
 
+// 创建 Case 时允许单 Agent 创建，也允许前端多选 Agent 后批量创建同内容 Case。
 export interface ScenarioCreate {
-  agent_id: string
+  agent_ids: string[]
   name: string
   description?: string
   prompt: string
@@ -109,7 +110,7 @@ export interface CreateExecutionRequest {
   llm_model_id?: string
 }
 
-// 创建并发执行请求，Agent 模型和并发执行策略由后端统一控制。
+// 并发执行请求只描述输入与并发参数，具体执行策略由后端统一控制。
 export interface CreateConcurrentExecutionRequest {
   input: string
   concurrency: number
@@ -166,7 +167,7 @@ export interface ClickHouseConfigUpdate {
   source_type: string
 }
 
-// 前端运行时配置，来自后端系统配置接口，避免页面硬编码后端环境变量默认值。
+// 运行时配置来自后端系统接口，避免前端硬编码关键阈值。
 export interface RuntimeConfig {
   concurrent_execution_max_concurrency: number
 }

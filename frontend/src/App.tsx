@@ -1,18 +1,19 @@
 import { useState } from 'react'
 import { Layout, Menu } from 'antd'
-import { Outlet, useNavigate, useLocation } from 'react-router-dom'
+import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
-  RobotOutlined,
   ApiOutlined,
-  FileTextOutlined,
-  PlayCircleOutlined,
-  SettingOutlined,
   CloudServerOutlined,
   ClusterOutlined,
+  FileTextOutlined,
+  PlayCircleOutlined,
+  RobotOutlined,
+  SettingOutlined,
 } from '@ant-design/icons'
 
 const { Header, Sider, Content } = Layout
 
+// 应用壳负责统一左侧导航结构，Case 模块入口文案需要与列表页保持一致，避免跨页认知割裂。
 const App = () => {
   const navigate = useNavigate()
   const location = useLocation()
@@ -21,7 +22,7 @@ const App = () => {
   const aaasMenuItems = [
     { key: '/agents', icon: <RobotOutlined />, label: 'Agent 管理' },
     { key: '/llms', icon: <ApiOutlined />, label: 'LLM 模型' },
-    { key: '/scenarios', icon: <FileTextOutlined />, label: '测试场景' },
+    { key: '/scenarios', icon: <FileTextOutlined />, label: 'Case 管理' },
     { key: '/executions', icon: <PlayCircleOutlined />, label: '测试执行' },
     { key: '/system', icon: <SettingOutlined />, label: '系统配置' },
   ]
@@ -30,20 +31,17 @@ const App = () => {
     {
       key: 'aaas',
       icon: <CloudServerOutlined />,
-      label: 'AaaS平台',
+      label: 'AaaS 平台',
       children: aaasMenuItems,
     },
     {
       key: 'maas',
       icon: <ClusterOutlined />,
-      label: 'MaaS平台',
+      label: 'MaaS 平台',
       children: [],
     },
   ]
 
-  // 默认展开 AaaS 平台
-
-  // 默认选中第一个菜单项（Agent 管理）当路径为根路径或没有匹配时
   let selectedKey = location.pathname
   if (location.pathname === '/' || location.pathname === '') {
     selectedKey = aaasMenuItems[0].key

@@ -86,12 +86,16 @@ def is_trace_ready_for_comparison(spans: list, expected_min_llm_count: int) -> b
 
 class ExecutionService:
     def __init__(self, session: AsyncSession):
+        """初始化执行链路依赖，确保 Agent、Case 与执行仓储共享同一会话。"""
+
         self.repo: ExecutionRepository = SQLAlchemyExecutionRepository(session)
         self.agent_repo = SQLAlchemyAgentRepository(session)
         self.scenario_repo = SQLAlchemyScenarioRepository(session)
         self.session = session
 
     async def create_execution(self, request: CreateExecutionRequest, background_tasks: BackgroundTasks) -> UUID:
+        """创建执行前校验 Agent 与 Case 绑定关系，避免未授权组合进入执行链路。"""
+
         agent = await self.agent_repo.get_by_id(request.agent_id)
         if not agent:
             raise ValueError(f"Agent {request.agent_id} not found")
@@ -99,6 +103,8 @@ class ExecutionService:
         scenario = await self.scenario_repo.get_by_id(request.scenario_id)
         if not scenario:
             raise ValueError(f"Scenario {request.scenario_id} not found")
+        if not await self.scenario_repo.is_bound_to_agent(request.scenario_id, request.agent_id):
+            raise ValueError(f"Scenario {request.scenario_id} is not bound to agent {request.agent_id}")
 
         if request.llm_model_id:
             llm_service = LLMService(self.session)

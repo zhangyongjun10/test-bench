@@ -167,7 +167,9 @@ const ExecutionList = () => {
     const res = await scenarioApi.list()
     const scenarios = res.data || []
     setAllScenarios(scenarios)
-    setFilteredScenarios(selectedAgentId ? scenarios.filter(scenario => scenario.agent_id === selectedAgentId) : [])
+    setFilteredScenarios(
+      selectedAgentId ? scenarios.filter(scenario => scenario.agent_ids.includes(selectedAgentId)) : [],
+    )
   }
 
   const loadLlms = async () => {
@@ -232,7 +234,9 @@ const ExecutionList = () => {
   }, [searchParams])
 
   useEffect(() => {
-    setFilteredScenarios(selectedAgentId ? allScenarios.filter(scenario => scenario.agent_id === selectedAgentId) : [])
+    setFilteredScenarios(
+      selectedAgentId ? allScenarios.filter(scenario => scenario.agent_ids.includes(selectedAgentId)) : [],
+    )
   }, [allScenarios, selectedAgentId])
 
   useEffect(() => {
@@ -253,7 +257,7 @@ const ExecutionList = () => {
   }
 
   const handleModalAgentChange = (agentId: string) => {
-    const scenarios = allScenarios.filter(scenario => scenario.agent_id === agentId)
+    const scenarios = allScenarios.filter(scenario => scenario.agent_ids.includes(agentId))
     setFilteredScenarios(scenarios)
     form.setFieldValue('scenario_id', undefined)
   }
@@ -261,8 +265,12 @@ const ExecutionList = () => {
   const handleSubmit = async () => {
     try {
       const values = await form.validateFields()
+      const selectedScenario = allScenarios.find(item => item.id === values.scenario_id)
+      if (!selectedScenario || !selectedScenario.agent_ids.includes(values.agent_id)) {
+        throw new Error('所选 Case 不属于当前 Agent')
+      }
       if (values.mode === 'concurrent') {
-        const scenario = allScenarios.find(item => item.id === values.scenario_id)
+        const scenario = selectedScenario
         const llm = llms.find(item => item.id === values.llm_model_id)
         if (!scenario || !llm) {
           throw new Error('场景或比对模型不存在')
