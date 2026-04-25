@@ -70,3 +70,6 @@ logs/
 .env
 backend/.env
 backend/alembic.ini
+
+# Docker compose (may contain sensitive environment variables)
+docker-compose.yml
