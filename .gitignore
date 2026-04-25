@@ -66,3 +66,7 @@ logs/
 *.db
 *.sqlite
 
+# Environment variables
+.env
+backend/.env
+backend/alembic.ini
